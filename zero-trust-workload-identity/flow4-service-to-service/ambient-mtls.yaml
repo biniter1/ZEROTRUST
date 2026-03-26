@@ -1,0 +1,272 @@
+# ============================================================
+# FLOW 4: Service → Service (Istio Ambient Mode)
+# Chuẩn: NIST SP 800-207 Tenet 1+2
+#         NSA K8s Hardening Guide §4
+#         Istio Ambient GA v1.24
+# ============================================================
+
+# ============================================================
+# STEP 1: Install Istio Ambient (Helm)
+# Chạy trước khi apply các manifest bên dưới
+# ============================================================
+# helm repo add istio https://istio-release.storage.googleapis.com/charts
+# helm repo update
+#
+# helm install istio-base istio/base -n istio-system --create-namespace
+# helm install istiod istio/istiod -n istio-system \
+#   --set profile=ambient \
+#   --wait
+# helm install istio-cni istio/cni -n istio-system \
+#   --set profile=ambient
+# helm install ztunnel istio/ztunnel -n istio-system
+
+---
+# ============================================================
+# STEP 2: Enable Ambient mode cho namespace production
+# Label namespace — không cần restart pods
+# ============================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: production
+  labels:
+    istio.io/dataplane-mode: ambient
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+
+---
+# ============================================================
+# STEP 3: PeerAuthentication — mTLS STRICT
+# Chuẩn: NIST 800-207 Tenet 2
+# Từ chối mọi plain text traffic trong namespace
+# ============================================================
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default-mtls-strict
+  namespace: production
+  labels:
+    standard: "NIST-800-207-Tenet2"
+spec:
+  mtls:
+    mode: STRICT
+
+---
+# ============================================================
+# STEP 4: AuthorizationPolicy — Default DENY ALL
+# Chuẩn: NIST 800-207 Tenet 1 — Never trust
+# Sau đó explicit allow từng flow
+# ============================================================
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: deny-all
+  namespace: production
+  labels:
+    standard: "NIST-800-207-Tenet1"
+spec: {} # Empty spec = deny all
+
+---
+# Allow: ingress → frontend
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-ingress-to-frontend
+  namespace: production
+spec:
+  selector:
+    matchLabels:
+      app: frontend
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            namespaces: ["istio-ingress"]
+
+---
+# Allow: frontend → productcatalogservice
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-frontend-to-productcatalog
+  namespace: production
+spec:
+  selector:
+    matchLabels:
+      app: productcatalogservice
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/production/sa/frontend-sa"
+
+---
+# Allow: frontend → cartservice
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-frontend-to-cart
+  namespace: production
+spec:
+  selector:
+    matchLabels:
+      app: cartservice
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/production/sa/frontend-sa"
+              - "cluster.local/ns/production/sa/checkoutservice-sa"
+
+---
+# Allow: frontend → checkoutservice
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-frontend-to-checkout
+  namespace: production
+spec:
+  selector:
+    matchLabels:
+      app: checkoutservice
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/production/sa/frontend-sa"
+
+---
+# Allow: checkoutservice → paymentservice
+# QUAN TRỌNG: chỉ checkout được gọi payment
+# frontend KHÔNG được gọi payment trực tiếp
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-checkout-to-payment
+  namespace: production
+spec:
+  selector:
+    matchLabels:
+      app: paymentservice
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              # Chỉ checkout — không phải frontend hay bất kỳ ai khác
+              - "cluster.local/ns/production/sa/checkoutservice-sa"
+
+---
+# Allow: checkoutservice → shippingservice
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-checkout-to-shipping
+  namespace: production
+spec:
+  selector:
+    matchLabels:
+      app: shippingservice
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/production/sa/checkoutservice-sa"
+              - "cluster.local/ns/production/sa/frontend-sa"
+
+---
+# Allow: checkoutservice → emailservice
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-checkout-to-email
+  namespace: production
+spec:
+  selector:
+    matchLabels:
+      app: emailservice
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/production/sa/checkoutservice-sa"
+
+---
+# Allow: frontend → currencyservice
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-frontend-to-currency
+  namespace: production
+spec:
+  selector:
+    matchLabels:
+      app: currencyservice
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/production/sa/frontend-sa"
+              - "cluster.local/ns/production/sa/checkoutservice-sa"
+
+---
+# Allow: frontend → recommendationservice
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-frontend-to-recommendation
+  namespace: production
+spec:
+  selector:
+    matchLabels:
+      app: recommendationservice
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/production/sa/frontend-sa"
+
+---
+# Allow: frontend → adservice
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-frontend-to-ad
+  namespace: production
+spec:
+  selector:
+    matchLabels:
+      app: adservice
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/production/sa/frontend-sa"
+
+---
+# ============================================================
+# STEP 5: Waypoint Proxy — L7 enforcement
+# Per-namespace, handle AuthorizationPolicy L7
+# ============================================================
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: production-waypoint
+  namespace: production
+  labels:
+    istio.io/waypoint-for: namespace
+spec:
+  gatewayClassName: istio-waypoint
+  listeners:
+    - name: mesh
+      port: 15008
+      protocol: HBONE

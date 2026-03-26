@@ -1,0 +1,185 @@
+# ============================================================
+# K8S RBAC — Map IAM Identity Center roles → K8s Groups
+# Chuẩn: NSA K8s Hardening Guide §5
+#         CIS EKS Benchmark 5.1.1
+# ============================================================
+
+# aws-auth ConfigMap — Map IAM Role → K8s Group
+# File này apply bằng kubectl sau khi EKS cluster up
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aws-auth
+  namespace: kube-system
+data:
+  # Map IAM Roles từ SSO Permission Sets → K8s Groups
+  mapRoles: |
+    # EKS Node Role — bắt buộc để nodes join cluster
+    - rolearn: arn:aws:iam::PRODUCTION_ACCOUNT_ID:role/zero-trust-eks-node-role
+      username: system:node:{{EC2PrivateDNSName}}
+      groups:
+        - system:bootstrappers
+        - system:nodes
+
+    # Developer Permission Set Role → K8s read-only group
+    - rolearn: arn:aws:iam::PRODUCTION_ACCOUNT_ID:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_DeveloperAccess_*
+      username: "developer:{{SessionName}}"
+      groups:
+        - k8s-developers     # Custom group — view namespace dev only
+
+    # DevOps Permission Set Role → K8s deployer group
+    - rolearn: arn:aws:iam::PRODUCTION_ACCOUNT_ID:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_DevOpsAccess_*
+      username: "devops:{{SessionName}}"
+      groups:
+        - k8s-devops          # Custom group — view production, full staging
+
+    # Admin Permission Set Role → K8s admin group
+    - rolearn: arn:aws:iam::PRODUCTION_ACCOUNT_ID:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_AdminAccess_*
+      username: "admin:{{SessionName}}"
+      groups:
+        - k8s-admins          # Custom group — cluster-admin (break-glass)
+
+    # GitHub Actions Deploy Role → K8s deployer
+    - rolearn: arn:aws:iam::PRODUCTION_ACCOUNT_ID:role/gha-eks-deploy-role
+      username: "gha-deploy:{{SessionName}}"
+      groups:
+        - k8s-deployers       # Custom group — deploy namespace production only
+
+---
+# ============================================================
+# K8S RBAC ROLES
+# ============================================================
+
+# ClusterRole: k8s-developer — view only, không access secrets
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: k8s-developer-role
+  labels:
+    standard: "NSA-K8s-Hardening-Guide-Section5"
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "endpoints", "configmaps"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]    # Xem logs để debug
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "list", "watch"]
+  # KHÔNG có: secrets, exec vào pod, tạo/xóa resource
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: k8s-developer-binding
+subjects:
+  - kind: Group
+    name: k8s-developers
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: k8s-developer-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Role: k8s-devops — view production, full staging (namespace-scoped)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: k8s-devops-production-role
+  namespace: production
+  labels:
+    standard: "NSA-K8s-Hardening-Guide-Section5"
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "configmaps", "events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]    # Cho phép debug pod production
+    verbs: ["create"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets", "statefulsets"]
+    verbs: ["get", "list", "watch"]
+  # KHÔNG có: secrets, delete, create deployment production
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: k8s-devops-production-binding
+  namespace: production
+subjects:
+  - kind: Group
+    name: k8s-devops
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: k8s-devops-production-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Role: k8s-deployer — GitHub Actions deploy role
+# Chỉ update deployments, không tạo/xóa
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: k8s-deployer-role
+  namespace: production
+  labels:
+    standard: "NSA-K8s-Hardening-Guide-Section5"
+    purpose: "github-actions-deploy"
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["services", "configmaps"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  # KHÔNG có: secrets, exec, delete, create namespace
+  # KHÔNG có: cluster-level resources
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: k8s-deployer-binding
+  namespace: production
+subjects:
+  - kind: Group
+    name: k8s-deployers
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: k8s-deployer-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# ClusterRoleBinding: admin — break-glass only
+# NOTE: Không tạo binding thường xuyên
+# Chỉ tạo khi emergency, tự xóa sau 1 giờ
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: k8s-admin-break-glass
+  annotations:
+    # Tự động xóa sau 1 giờ bởi cleanup cronjob
+    ttl: "3600"
+    reason: "Emergency access - must be removed after use"
+subjects:
+  - kind: Group
+    name: k8s-admins
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: cluster-admin
+  apiGroup: rbac.authorization.k8s.io
