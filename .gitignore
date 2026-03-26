@@ -2,3 +2,6 @@ Terraform/terraform.tfstate.backup
 Terraform/terraform.tfstate
 Terraform/.terraform.lock.hcl
 Terraform/.terraform
+zero-trust-human-identity/terraform/.terraform
+zero-trust-human-identity/terraform/.terraform.lock.hcl
+zero-trust-human-identity/terraform
