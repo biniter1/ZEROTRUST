@@ -1,7 +1,18 @@
-Terraform/terraform.tfstate.backup
-Terraform/terraform.tfstate
-Terraform/.terraform.lock.hcl
-Terraform/.terraform
-zero-trust-human-identity/terraform/.terraform
-zero-trust-human-identity/terraform/.terraform.lock.hcl
-zero-trust-human-identity/terraform
+# Ignore the large provider binaries and modules
+**/.terraform/
+
+# Ignore the lock file (Optional: some prefer to keep this to pin versions, 
+# but in many dev workflows it is excluded to avoid merge conflicts)
+.terraform.lock.hcl
+
+# IMPORTANT: Ignore state files (these contain secrets/credentials in plain text)
+*.tfstate
+*.tfstate.backup
+
+# Ignore variables that might contain secrets
+*.tfvars
+*.tfvars.json
+
+# Ignore local environment overrides
+.terraformrc
+terraform.rc
