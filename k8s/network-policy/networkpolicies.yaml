@@ -1,0 +1,572 @@
+# ============================================================
+# NETWORK POLICIES — Zero Trust network cho Online Boutique
+#
+# NetworkPolicy là gì?
+#   Firewall rules ở cấp Pod trong K8s
+#   Mặc định K8s: mọi Pod nói chuyện được với mọi Pod
+#   NetworkPolicy: chỉ cho phép traffic được khai báo rõ
+#
+# Cách hoạt động:
+#   - Viết policy cho Pod A: "chỉ nhận traffic từ Pod B"
+#   - Mọi traffic khác vào Pod A → bị DROP
+#   - Áp dụng theo label selector, không phải IP
+#
+# Lưu ý EKS:
+#   AWS VPC CNI mặc định KHÔNG enforce NetworkPolicy
+#   Cần enable addon: aws eks create-addon --addon-name vpc-cni
+#   với networkPolicy=true, hoặc dùng Calico
+#
+# Chuẩn: NSA K8s §4 · NIST 800-207 T1 (micro-segmentation)
+# ============================================================
+
+# ── POLICY 0: DEFAULT DENY TẤT CẢ ───────────────────────────
+# Đây là nền tảng Zero Trust — chặn hết trước, mở sau
+# Áp cho toàn bộ namespace production
+# Sau policy này, KHÔNG có Pod nào nói chuyện được với Pod nào
+# Các policy bên dưới sẽ mở dần từng kết nối cần thiết
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: production
+spec:
+  podSelector: {} # {} = áp cho TẤT CẢ pods trong namespace
+  policyTypes:
+    - Ingress # chặn traffic VÀO
+    - Egress # chặn traffic RA
+  # Không có rules → chặn hết
+
+---
+# ── POLICY 1: FRONTEND ───────────────────────────────────────
+# Frontend nhận traffic từ: internet (qua LoadBalancer/ALB)
+# Frontend gửi đi đến: 7 services nội bộ
+# Frontend KHÔNG được gọi: paymentservice (chỉ checkout mới được)
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: frontend-policy
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: frontend # policy này áp cho pod có label app=frontend
+
+  policyTypes:
+    - Ingress
+    - Egress
+
+  ingress:
+    # Cho phép traffic từ internet vào (qua ALB)
+    # Không có podSelector/namespaceSelector = cho phép từ bất kỳ đâu
+    - ports:
+        - port: 8080
+          protocol: TCP
+
+  egress:
+    # Cho phép frontend gọi đến các services nội bộ
+    - to:
+        - podSelector:
+            matchLabels:
+              app: productcatalogservice
+      ports:
+        - port: 3550
+          protocol: TCP
+
+    - to:
+        - podSelector:
+            matchLabels:
+              app: currencyservice
+      ports:
+        - port: 7000
+          protocol: TCP
+
+    - to:
+        - podSelector:
+            matchLabels:
+              app: cartservice
+      ports:
+        - port: 7070
+          protocol: TCP
+
+    - to:
+        - podSelector:
+            matchLabels:
+              app: recommendationservice
+      ports:
+        - port: 8080
+          protocol: TCP
+
+    - to:
+        - podSelector:
+            matchLabels:
+              app: checkoutservice
+      ports:
+        - port: 5050
+          protocol: TCP
+
+    - to:
+        - podSelector:
+            matchLabels:
+              app: adservice
+      ports:
+        - port: 9555
+          protocol: TCP
+
+    - to:
+        - podSelector:
+            matchLabels:
+              app: shippingservice
+      ports:
+        - port: 50051
+          protocol: TCP
+
+    # Cho phép DNS lookup (cần để resolve tên service)
+    # Không có DNS → không resolve được "cartservice:7070"
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+
+---
+# ── POLICY 2: CHECKOUTSERVICE ────────────────────────────────
+# Checkout là service quan trọng nhất về bảo mật
+# Chỉ frontend được gọi checkout
+# Checkout gọi đến: cart, product, shipping, payment, email, currency
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: checkoutservice-policy
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: checkoutservice
+  policyTypes:
+    - Ingress
+    - Egress
+
+  ingress:
+    # Chỉ frontend được gọi checkoutservice
+    - from:
+        - podSelector:
+            matchLabels:
+              app: frontend
+      ports:
+        - port: 5050
+          protocol: TCP
+
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: cartservice
+      ports:
+        - port: 7070
+          protocol: TCP
+
+    - to:
+        - podSelector:
+            matchLabels:
+              app: productcatalogservice
+      ports:
+        - port: 3550
+          protocol: TCP
+
+    - to:
+        - podSelector:
+            matchLabels:
+              app: shippingservice
+      ports:
+        - port: 50051
+          protocol: TCP
+
+    # Payment: CHỈ checkout mới được gọi
+    - to:
+        - podSelector:
+            matchLabels:
+              app: paymentservice
+      ports:
+        - port: 50051
+          protocol: TCP
+
+    - to:
+        - podSelector:
+            matchLabels:
+              app: emailservice
+      ports:
+        - port: 5000
+          protocol: TCP
+
+    - to:
+        - podSelector:
+            matchLabels:
+              app: currencyservice
+      ports:
+        - port: 7000
+          protocol: TCP
+
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+
+---
+# ── POLICY 3: CARTSERVICE ────────────────────────────────────
+# Cart nhận từ: frontend + checkout
+# Cart gửi ra: ElastiCache Redis (ngoài cluster, cần egress ra VPC)
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cartservice-policy
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: cartservice
+  policyTypes:
+    - Ingress
+    - Egress
+
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: frontend
+        - podSelector:
+            matchLabels:
+              app: checkoutservice
+      ports:
+        - port: 7070
+          protocol: TCP
+
+  egress:
+    # ElastiCache Redis chạy ngoài cluster (AWS managed)
+    # Cần cho phép egress ra VPC CIDR
+    # Port 6379 là Redis default port
+    - ports:
+        - port: 6379
+          protocol: TCP
+
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+
+---
+# ── POLICY 4: PRODUCTCATALOGSERVICE ──────────────────────────
+# Nhận từ: frontend + checkout + recommendation
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: productcatalogservice-policy
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: productcatalogservice
+  policyTypes:
+    - Ingress
+    - Egress
+
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: frontend
+        - podSelector:
+            matchLabels:
+              app: checkoutservice
+        - podSelector:
+            matchLabels:
+              app: recommendationservice
+      ports:
+        - port: 3550
+          protocol: TCP
+
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+
+---
+# ── POLICY 5: CURRENCYSERVICE ────────────────────────────────
+# Nhận từ: frontend + checkout
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: currencyservice-policy
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: currencyservice
+  policyTypes:
+    - Ingress
+    - Egress
+
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: frontend
+        - podSelector:
+            matchLabels:
+              app: checkoutservice
+      ports:
+        - port: 7000
+          protocol: TCP
+
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+
+---
+# ── POLICY 6: PAYMENTSERVICE — POLICYQUAN TRỌNG NHẤT ─────────
+# Chỉ checkoutservice được gọi paymentservice
+# Frontend, recommendation, bất kỳ pod nào khác → bị chặn
+# Đây là Zero Trust thực sự: enforce ở network level
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: paymentservice-policy
+  namespace: production
+  annotations:
+    security.note: "CRITICAL — only checkoutservice allowed"
+spec:
+  podSelector:
+    matchLabels:
+      app: paymentservice
+  policyTypes:
+    - Ingress
+    - Egress
+
+  ingress:
+    # CHỈ checkout — không phải frontend, không phải bất kỳ ai khác
+    - from:
+        - podSelector:
+            matchLabels:
+              app: checkoutservice
+      ports:
+        - port: 50051
+          protocol: TCP
+
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+
+---
+# ── POLICY 7: SHIPPINGSERVICE ────────────────────────────────
+# Nhận từ: frontend + checkout
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: shippingservice-policy
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: shippingservice
+  policyTypes:
+    - Ingress
+    - Egress
+
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: frontend
+        - podSelector:
+            matchLabels:
+              app: checkoutservice
+      ports:
+        - port: 50051
+          protocol: TCP
+
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+
+---
+# ── POLICY 8: EMAILSERVICE ───────────────────────────────────
+# Nhận từ: chỉ checkout
+# Gửi ra: AWS SES endpoint (HTTPS ra internet)
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: emailservice-policy
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: emailservice
+  policyTypes:
+    - Ingress
+    - Egress
+
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: checkoutservice
+      ports:
+        - port: 8080
+          protocol: TCP
+
+  egress:
+    # AWS SES endpoint — gửi email ra ngoài internet
+    # Port 443 (HTTPS) hoặc 587 (SMTP)
+    - ports:
+        - port: 443
+          protocol: TCP
+        - port: 587
+          protocol: TCP
+
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+
+---
+# ── POLICY 9: RECOMMENDATIONSERVICE ─────────────────────────
+# Nhận từ: chỉ frontend
+# Gọi đến: productcatalog
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: recommendationservice-policy
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: recommendationservice
+  policyTypes:
+    - Ingress
+    - Egress
+
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: frontend
+      ports:
+        - port: 8080
+          protocol: TCP
+
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: productcatalogservice
+      ports:
+        - port: 3550
+          protocol: TCP
+
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+
+---
+# ── POLICY 10: ADSERVICE ─────────────────────────────────────
+# Nhận từ: chỉ frontend
+# Không gọi đi đâu cả (isolated nhất)
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: adservice-policy
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: adservice
+  policyTypes:
+    - Ingress
+    - Egress
+
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: frontend
+      ports:
+        - port: 9555
+          protocol: TCP
+
+  egress:
+    # adservice gửi metrics lên CloudWatch
+    - ports:
+        - port: 443
+          protocol: TCP
+
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP

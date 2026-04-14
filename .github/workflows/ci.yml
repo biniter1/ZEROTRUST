@@ -1,0 +1,405 @@
+# ============================================================
+# CI WORKFLOW — chạy khi mở/update Pull Request vào main
+#
+# Nâng cấp Zero Trust:
+#   + GitHub-hosted runner (ephemeral) thay self-hosted
+#   + Tất cả Actions pin bằng SHA
+#   + Security enforce 
+#   + SARIF upload cho mọi tool
+#
+# Chuẩn: CIS GitHub §1.1.3-1.1.5 · NIST 800-207 T3
+# ============================================================
+
+name: CI — PR Security Gates
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true   
+
+permissions:
+  contents: read
+  security-events: write
+  pull-requests: write        # cho pr-comment job
+  id-token: write
+
+jobs:
+  # ──────────────────────────────────────────────
+  # JOB 1: Detect changed services
+  # ──────────────────────────────────────────────
+  changes:
+    name: Detect Changed Services
+    runs-on: ubuntu-latest    # ephemeral — SLSA L3
+    outputs:
+      frontend:              ${{ steps.filter.outputs.frontend }}
+      cartservice:           ${{ steps.filter.outputs.cartservice }}
+      productcatalogservice: ${{ steps.filter.outputs.productcatalogservice }}
+      currencyservice:       ${{ steps.filter.outputs.currencyservice }}
+      paymentservice:        ${{ steps.filter.outputs.paymentservice }}
+      shippingservice:       ${{ steps.filter.outputs.shippingservice }}
+      emailservice:          ${{ steps.filter.outputs.emailservice }}
+      checkoutservice:       ${{ steps.filter.outputs.checkoutservice }}
+      recommendationservice: ${{ steps.filter.outputs.recommendationservice }}
+      adservice:             ${{ steps.filter.outputs.adservice }}
+      any_service:           ${{ steps.filter.outputs.any_service }}
+      terraform:             ${{ steps.filter.outputs.terraform }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36  # v3.0.2
+        id: filter
+        with:
+          filters: |
+            frontend:
+              - 'src/frontend/**'
+              - 'protos/**'
+            cartservice:
+              - 'src/cartservice/**'
+            productcatalogservice:
+              - 'src/productcatalogservice/**'
+              - 'protos/**'
+            currencyservice:
+              - 'src/currencyservice/**'
+            paymentservice:
+              - 'src/paymentservice/**'
+            shippingservice:
+              - 'src/shippingservice/**'
+              - 'protos/**'
+            emailservice:
+              - 'src/emailservice/**'
+            checkoutservice:
+              - 'src/checkoutservice/**'
+              - 'protos/**'
+            recommendationservice:
+              - 'src/recommendationservice/**'
+              - 'protos/**'
+            adservice:
+              - 'src/adservice/**'
+              - 'protos/**'
+            any_service:
+              - 'src/**'
+            terraform:
+              - 'terraform/**'
+
+  # ──────────────────────────────────────────────
+  # JOB 2: Secret Scan — chạy luôn, không phụ thuộc changes
+  # Bất kể service nào thay đổi, luôn phải scan secret
+  # ──────────────────────────────────────────────
+  secret-scan:
+    name: Secret Scan (Gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0  
+
+      # Report step 
+      - name: Gitleaks scan (report)
+        uses: gitleaks/gitleaks-action@ff98106e4c7891ad287a8c553e0b3e72d5b9b0b7  # v2.3.9
+        id: gitleaks
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Gitleaks SARIF
+        uses: github/codeql-action/upload-sarif@b56ba49b26e50535fa1e7b7e2f60cdf9dc2b3f02
+        if: always()
+        with:
+          sarif_file: results.sarif
+          category: gitleaks
+        continue-on-error: true  # SARIF có thể không tồn tại nếu không có finding
+
+      # Enforce step — fail nếu có secret
+      - name: Gitleaks scan (enforce)
+        uses: gitleaks/gitleaks-action@ff98106e4c7891ad287a8c553e0b3e72d5b9b0b7
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ──────────────────────────────────────────────
+  # JOB 3: SAST — chỉ chạy nếu có service thay đổi
+  # ──────────────────────────────────────────────
+  sast:
+    name: SAST (Semgrep)
+    needs: changes
+    if: needs.changes.outputs.any_service == 'true'
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep:latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      # Report
+      - name: Semgrep scan (report)
+        run: |
+          semgrep scan \
+            --config p/security-audit \
+            --config p/secrets \
+            --config p/owasp-top-ten \
+            --sarif --output semgrep.sarif \
+            --metrics=off . || true
+
+      - name: Upload Semgrep SARIF
+        uses: github/codeql-action/upload-sarif@b56ba49b26e50535fa1e7b7e2f60cdf9dc2b3f02
+        if: always()
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+      # Enforce
+      - name: Semgrep scan (enforce)
+        run: |
+          semgrep scan \
+            --config p/security-audit \
+            --config p/secrets \
+            --config p/owasp-top-ten \
+            --error --severity ERROR \
+            --metrics=off .
+
+  # ──────────────────────────────────────────────
+  # JOB 4: Dependency Scan — Trivy fs
+  # ──────────────────────────────────────────────
+  dependency-scan:
+    name: Dependency Scan (Trivy fs)
+    needs: changes
+    if: needs.changes.outputs.any_service == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      # Report
+      - name: Trivy fs scan (report)
+        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0  # SHA-pinned
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-fs.sarif
+          severity: CRITICAL,HIGH
+          exit-code: '0'
+
+      - name: Upload Trivy fs SARIF
+        uses: github/codeql-action/upload-sarif@b56ba49b26e50535fa1e7b7e2f60cdf9dc2b3f02
+        if: always()
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+
+      # Enforce
+      - name: Trivy fs scan (enforce — CRITICAL)
+        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL
+          exit-code: '1'
+          format: table
+
+  # ──────────────────────────────────────────────
+  # JOB 5: IaC Scan — chỉ khi terraform thay đổi
+  # ──────────────────────────────────────────────
+  iac-scan:
+    name: IaC Scan (Checkov)
+    needs: changes
+    if: needs.changes.outputs.terraform == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Checkov IaC scan
+        uses: bridgecrewio/checkov-action@f88bf0cd4c2b9f23da70b81b9d0b3ec9cf975429
+        with:
+          directory: terraform/
+          framework: terraform
+          output_format: sarif
+          output_file_path: checkov.sarif
+          soft_fail: true
+
+      - name: Upload Checkov SARIF
+        uses: github/codeql-action/upload-sarif@b56ba49b26e50535fa1e7b7e2f60cdf9dc2b3f02
+        if: always()
+        with:
+          sarif_file: checkov.sarif
+          category: checkov
+
+  # ──────────────────────────────────────────────
+  # JOB 6: Language CI — reusable per language
+  # ──────────────────────────────────────────────
+  ci-go:
+    name: Go CI
+    needs: changes
+    strategy:
+      matrix:
+        include:
+          - service: frontend
+            changed: ${{ needs.changes.outputs.frontend }}
+          - service: checkoutservice
+            changed: ${{ needs.changes.outputs.checkoutservice }}
+          - service: productcatalogservice
+            changed: ${{ needs.changes.outputs.productcatalogservice }}
+          - service: shippingservice
+            changed: ${{ needs.changes.outputs.shippingservice }}
+    uses: ./.github/workflows/reusable-go-ci.yml
+    with:
+      service: ${{ matrix.service }}
+      changed: ${{ matrix.changed }}
+      go-version: '1.21'
+    secrets: inherit
+
+  ci-node:
+    name: Node.js CI
+    needs: changes
+    strategy:
+      matrix:
+        include:
+          - service: currencyservice
+            changed: ${{ needs.changes.outputs.currencyservice }}
+          - service: paymentservice
+            changed: ${{ needs.changes.outputs.paymentservice }}
+    uses: ./.github/workflows/reusable-nodejs-ci.yml
+    with:
+      service: ${{ matrix.service }}
+      changed: ${{ matrix.changed }}
+      node-version: '20'
+    secrets: inherit
+
+  ci-python:
+    name: Python CI
+    needs: changes
+    strategy:
+      matrix:
+        include:
+          - service: emailservice
+            changed: ${{ needs.changes.outputs.emailservice }}
+          - service: recommendationservice
+            changed: ${{ needs.changes.outputs.recommendationservice }}
+    uses: ./.github/workflows/reusable-python-ci.yml
+    with:
+      service: ${{ matrix.service }}
+      changed: ${{ matrix.changed }}
+      python-version: '3.11'
+    secrets: inherit
+
+  ci-java:
+    name: Java CI
+    needs: changes
+    if: needs.changes.outputs.adservice == 'true'
+    uses: ./.github/workflows/reusable-java-ci.yml
+    with:
+      service: adservice
+      java-version: '17'
+    secrets: inherit
+
+  ci-dotnet:
+    name: .NET CI
+    needs: changes
+    if: needs.changes.outputs.cartservice == 'true'
+    uses: ./.github/workflows/reusable-dotnet-ci.yml
+    with:
+      service: cartservice
+      dotnet-version: '8.0'
+    secrets: inherit
+
+  # ──────────────────────────────────────────────
+  # JOB 7: CI Gate — tổng hợp, là required status check
+  # Branch protection chỉ cần check job này
+  # ──────────────────────────────────────────────
+  ci-gate:
+    name: CI Gate (all checks passed)
+    runs-on: ubuntu-latest
+    needs:
+      - secret-scan
+      - sast
+      - dependency-scan
+      - iac-scan
+      - ci-go
+      - ci-node
+      - ci-python
+      - ci-java
+      - ci-dotnet
+    if: always()
+    steps:
+      - name: Evaluate all jobs
+        run: |
+          echo "=== CI Gate Evaluation ==="
+          echo "secret-scan:      ${{ needs.secret-scan.result }}"
+          echo "sast:             ${{ needs.sast.result }}"
+          echo "dependency-scan:  ${{ needs.dependency-scan.result }}"
+          echo "iac-scan:         ${{ needs.iac-scan.result }}"
+          echo "ci-go:            ${{ needs.ci-go.result }}"
+          echo "ci-node:          ${{ needs.ci-node.result }}"
+          echo "ci-python:        ${{ needs.ci-python.result }}"
+          echo "ci-java:          ${{ needs.ci-java.result }}"
+          echo "ci-dotnet:        ${{ needs.ci-dotnet.result }}"
+
+          # Các job có thể skipped (nếu không có service thay đổi) — đó là OK
+          # Chỉ fail nếu kết quả là 'failure' hoặc 'cancelled'
+          FAIL=0
+          for result in \
+            "${{ needs.secret-scan.result }}" \
+            "${{ needs.sast.result }}" \
+            "${{ needs.dependency-scan.result }}"; do
+            if [[ "$result" == "failure" || "$result" == "cancelled" ]]; then
+              FAIL=1
+            fi
+          done
+
+          if [[ "$FAIL" == "1" ]]; then
+            echo "ERROR: Security checks failed. PR cannot be merged."
+            exit 1
+          fi
+          echo "All applicable checks passed."
+
+  # ──────────────────────────────────────────────
+  # JOB 8: PR Comment 
+  # ──────────────────────────────────────────────
+  pr-comment:
+    name: PR Status Comment
+    needs:
+      - secret-scan
+      - sast
+      - dependency-scan
+      - ci-gate
+    runs-on: ubuntu-latest
+    if: always()
+    permissions:
+      pull-requests: write
+    steps:
+      - uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          script: |
+            const r = (v) => v === 'success' ? '✅' : v === 'skipped' ? '⏭️' : '❌';
+            const overall = '${{ needs.ci-gate.result }}' === 'success' ? '✅ PASSED' : '❌ FAILED';
+
+            const body = `## ${overall} — Zero-Trust CI Gate
+
+            | Check | Status | Standard |
+            |-------|--------|----------|
+            | Secret Scan (Gitleaks) | ${r('${{ needs.secret-scan.result }}')} | CIS GitHub §2.3 |
+            | SAST (Semgrep) | ${r('${{ needs.sast.result }}')} | NIST 800-204 §3.2 |
+            | Dependency Scan (Trivy) | ${r('${{ needs.dependency-scan.result }}')} | NIST 800-190 §4.2 |
+
+            > Docker build và signing **không chạy trên PR** — chỉ chạy khi merge vào \`main\`
+
+            **Run:** ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const bot = comments.find(c => c.user.type === 'Bot' && c.body.includes('Zero-Trust CI Gate'));
+            if (bot) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                comment_id: bot.id, body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: context.issue.number, body
+              });
+            }

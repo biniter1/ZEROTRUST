@@ -1,0 +1,301 @@
+# ============================================================
+# BUILD WORKFLOW — chạy khi merge vào main
+# Nâng cấp Zero Trust:
+#   + GitHub-hosted runner (ephemeral) — SLSA L3
+#   + SHA-pinned Actions
+#   + Trivy enforce (không comment out)
+#   + cosign sign với AWS KMS
+#   + Syft SBOM attest
+#   + SLSA Provenance (actions/attest-build-provenance)
+#   + Push bằng digest, không tag mutable
+#   + 2 OIDC role riêng: ECR push vs EKS deploy
+#
+# Chuẩn: SLSA L3 · NIST 800-190 · NIST 800-207 T6
+# ============================================================
+
+name: Build — Image + Sign + Attest
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write        # OIDC + cosign
+  attestations: write    # actions/attest-build-provenance
+  security-events: write # upload SARIF
+
+env:
+  AWS_REGION: ap-southeast-1   # đúng với Layer 1 (không phải ap-southeast-2)
+  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.ap-southeast-1.amazonaws.com
+  ECR_REPO_PREFIX: online-boutique
+
+jobs:
+  # ──────────────────────────────────────────────
+  # JOB 1: Detect changed services
+  # ──────────────────────────────────────────────
+  changes:
+    name: Detect Changed Services
+    runs-on: ubuntu-latest
+    outputs:
+      frontend:              ${{ steps.filter.outputs.frontend }}
+      cartservice:           ${{ steps.filter.outputs.cartservice }}
+      productcatalogservice: ${{ steps.filter.outputs.productcatalogservice }}
+      currencyservice:       ${{ steps.filter.outputs.currencyservice }}
+      paymentservice:        ${{ steps.filter.outputs.paymentservice }}
+      shippingservice:       ${{ steps.filter.outputs.shippingservice }}
+      emailservice:          ${{ steps.filter.outputs.emailservice }}
+      checkoutservice:       ${{ steps.filter.outputs.checkoutservice }}
+      recommendationservice: ${{ steps.filter.outputs.recommendationservice }}
+      adservice:             ${{ steps.filter.outputs.adservice }}
+      services_json:         ${{ steps.build-matrix.outputs.matrix }}
+      matrix:                ${{ steps.build-matrix.outputs.matrix }}
+      has_changes:           ${{ steps.build-matrix.outputs.has_changes }}
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36  # v3.0.2
+        id: filter
+        with:
+          filters: |
+            frontend:
+              - 'src/frontend/**'
+              - 'protos/**'
+            cartservice:
+              - 'src/cartservice/**'
+            productcatalogservice:
+              - 'src/productcatalogservice/**'
+              - 'protos/**'
+            currencyservice:
+              - 'src/currencyservice/**'
+            paymentservice:
+              - 'src/paymentservice/**'
+            shippingservice:
+              - 'src/shippingservice/**'
+              - 'protos/**'
+            emailservice:
+              - 'src/emailservice/**'
+            checkoutservice:
+              - 'src/checkoutservice/**'
+              - 'protos/**'
+            recommendationservice:
+              - 'src/recommendationservice/**'
+              - 'protos/**'
+            adservice:
+              - 'src/adservice/**'
+              - 'protos/**'
+      - name: Build dynamic matrix
+        id: build-matrix
+        run: |
+          SERVICES=()
+
+          add() {
+            local svc=$1 ctx=$2 changed=$3
+            if [[ "$changed" == "true" ]]; then
+              SERVICES+=("{\"service\":\"$svc\",\"context\":\"$ctx\"}")
+            fi    
+          }
+
+          add frontend              src/frontend              "${{ steps.filter.outputs.frontend }}"
+          add cartservice           src/cartservice           "${{ steps.filter.outputs.cartservice }}"
+          add productcatalogservice src/productcatalogservice "${{ steps.filter.outputs.productcatalogservice }}"
+          add currencyservice       src/currencyservice       "${{ steps.filter.outputs.currencyservice }}"
+          add paymentservice        src/paymentservice        "${{ steps.filter.outputs.paymentservice }}"
+          add shippingservice       src/shippingservice       "${{ steps.filter.outputs.shippingservice }}"
+          add emailservice          src/emailservice          "${{ steps.filter.outputs.emailservice }}"
+          add checkoutservice       src/checkoutservice       "${{ steps.filter.outputs.checkoutservice }}"
+          add recommendationservice src/recommendationservice "${{ steps.filter.outputs.recommendationservice }}"
+          add adservice             src/adservice             "${{ steps.filter.outputs.adservice }}"
+
+          if [[ ${#SERVICES[@]} -eq 0 ]]; then
+            echo "matrix={\"include\":[]}" >> "$GITHUB_OUTPUT"
+            echo "has_changes=false"       >> "$GITHUB_OUTPUT"
+          else
+            JOINED=$(IFS=,; echo "${SERVICES[*]}")
+            echo "matrix={\"include\":[$JOINED]}" >> "$GITHUB_OUTPUT"
+            echo "has_changes=true"               >> "$GITHUB_OUTPUT"
+          fi
+
+  # ──────────────────────────────────────────────
+  # JOB 2: Build + Scan + Sign
+  # Matrix động — chỉ build services thay đổi
+  # ──────────────────────────────────────────────
+  build-sign:
+    name: Build + Sign — ${{ matrix.service }}
+    needs: changes
+    if: ${{ needs.changes.outputs.has_changes == 'true'}}
+    runs-on: ubuntu-latest   
+    strategy:
+      matrix: ${{ fromJson(needs.changes.outputs.matrix) }}
+      fail-fast: false
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      security-events: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      # ── OIDC → gha-ecr-push-role (TTL 15p) ───
+      # Đây là role ECR-only từ Layer 1 Flow 1
+      - name: Configure AWS credentials (OIDC — ECR push only)
+        uses: aws-actions/configure-aws-credentials@ececc85a0f8c18e2a3bd4e5454f09b583b27ad89  # v4.1.0
+        with:
+          role-to-assume: ${{ secrets.GHA_ECR_PUSH_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 900   # TTL 15 phút
+          role-session-name: build-${{ matrix.service }}-${{ github.run_id }}
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@062b18b96a7aff071d4dc91bc00c4c1a7945b076  # v2.0.1
+
+      # Tạo ECR repo nếu chưa tồn tại — kế thừa từ pipeline cũ
+      - name: Ensure ECR repository exists
+        run: |
+          aws ecr describe-repositories \
+            --repository-names ${{ env.ECR_REPO_PREFIX }}/${{ matrix.service }} \
+            --region ${{ env.AWS_REGION }} 2>/dev/null || \
+          aws ecr create-repository \
+            --repository-name ${{ env.ECR_REPO_PREFIX }}/${{ matrix.service }} \
+            --image-scanning-configuration scanOnPush=true \
+            --image-tag-mutability IMMUTABLE \
+            --encryption-configuration encryptionType=KMS \
+            --region ${{ env.AWS_REGION }}
+
+      # ── Setup BuildKit ────────────────────────
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f95db51fddba0c2d1ec667646a06c2ce06100226  # v3.0.0
+
+      # ── Build image (chưa push) ───────────────
+      - name: Build Docker image
+        id: build
+        uses: docker/build-push-action@4a13e500e55cf31b7a5d59a38ab2040ab0f42f56  # v5.1.0
+        with:
+          context: ${{ matrix.context }}
+          push: false
+          load: true
+          tags: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO_PREFIX }}/${{ matrix.service }}:${{ github.sha }}
+          no-cache: true   
+          build-args: |
+            VERSION=${{ github.sha }}
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+            GIT_REPO=${{ github.repository }}
+
+      # ── Trivy image scan — TRƯỚC khi push ────
+      - name: Trivy image scan (report)
+        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0
+        with:
+          image-ref: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO_PREFIX }}/${{ matrix.service }}:${{ github.sha }}
+          format: sarif
+          output: trivy-${{ matrix.service }}.sarif
+          severity: CRITICAL,HIGH
+          vuln-type: os,library
+          exit-code: '0'
+
+      - name: Upload Trivy SARIF
+        uses: github/codeql-action/upload-sarif@b56ba49b26e50535fa1e7b7e2f60cdf9dc2b3f02
+        if: always()
+        with:
+          sarif_file: trivy-${{ matrix.service }}.sarif
+          category: trivy-${{ matrix.service }}
+
+      - name: Trivy image scan (enforce — CRITICAL)
+        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0
+        with:
+          image-ref: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO_PREFIX }}/${{ matrix.service }}:${{ github.sha }}
+          severity: CRITICAL
+          exit-code: '1'
+          format: table
+
+      # ── Push image (sau khi scan sạch) ───────
+      - name: Push image to ECR
+        id: push
+        uses: docker/build-push-action@4a13e500e55cf31b7a5d59a38ab2040ab0f42f56
+        with:
+          context: ${{ matrix.context }}
+          push: true
+          tags: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO_PREFIX }}/${{ matrix.service }}:${{ github.sha }}
+          no-cache: true
+
+      # ── Generate SBOM (Syft) ──────────────────
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@ab5d7b5f48981941c4c5d6bf33aeb98fe3bae38c
+
+      - name: Generate SBOM (CycloneDX)
+        run: |
+          syft \
+            ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO_PREFIX }}/${{ matrix.service }}@${{ steps.push.outputs.digest }} \
+            -o cyclonedx-json \
+            --file sbom-${{ matrix.service }}.json
+
+      # ── Cosign sign (AWS KMS) ─────────────────
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@d7d6bc7722e3daa8354c50bcb52f4837da5e9b6a
+
+      - name: Sign image with AWS KMS
+        run: |
+          IMAGE="${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO_PREFIX }}/${{ matrix.service }}@${{ steps.push.outputs.digest }}"
+          cosign sign \
+            --key "awskms:///${{ secrets.COSIGN_KMS_KEY_ARN }}" \
+            --annotations "github-sha=${{ github.sha }}" \
+            --annotations "github-repo=${{ github.repository }}" \
+            --annotations "service=${{ matrix.service }}" \
+            --yes \
+            "$IMAGE"
+
+      # ── Attest SBOM ───────────────────────────
+      - name: Attest SBOM
+        run: |
+          IMAGE="${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO_PREFIX }}/${{ matrix.service }}@${{ steps.push.outputs.digest }}"
+          cosign attest \
+            --key "awskms:///${{ secrets.COSIGN_KMS_KEY_ARN }}" \
+            --type cyclonedx \
+            --predicate sbom-${{ matrix.service }}.json \
+            --yes \
+            "$IMAGE"
+
+      # ── SLSA Provenance Attestation ───────────
+      # Hoàn toàn mới — không có trong pipeline cũ
+      # GitHub native action — đạt SLSA L3
+      - name: Generate SLSA Provenance
+        uses: actions/attest-build-provenance@c074443f1aee8d4aeeae555aebba3282517141b2  # v2.2.3
+        with:
+          subject-name: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO_PREFIX }}/${{ matrix.service }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      # ── Build Summary ─────────────────────────
+      - name: Build summary
+        run: |
+          echo "## ${{ matrix.service }}" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Digest | \`${{ steps.push.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Signed | ✅ AWS KMS |" >> $GITHUB_STEP_SUMMARY
+          echo "| SBOM | ✅ CycloneDX |" >> $GITHUB_STEP_SUMMARY
+          echo "| Provenance | ✅ SLSA L3 |" >> $GITHUB_STEP_SUMMARY
+          echo "| Trivy | ✅ No CRITICAL |" >> $GITHUB_STEP_SUMMARY
+
+  # ──────────────────────────────────────────────
+  # JOB 3: Build Gate
+  # Trigger deploy chỉ khi tất cả services build thành công
+  # ──────────────────────────────────────────────
+  build-gate:
+    name: Build Gate
+    runs-on: ubuntu-latest
+    needs: [changes,build-sign]
+    if: always()
+    steps:
+      - name: Check build results
+        run: |
+          if [[ "${{ needs.changes.outputs.has_changes }}" == "false" ]]; then
+            echo "No detect services change - Skipp Build"
+            exit 0
+          fi
+          if [[ "${{ needs.build-sign.result }}" != "success" ]]; then
+            echo "Build failed — no deployment triggered"
+            exit 1
+          fi
+          echo "All changed services built, signed, and attested successfully"

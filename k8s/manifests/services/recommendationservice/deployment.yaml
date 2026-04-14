@@ -1,0 +1,101 @@
+# ============================================================
+# RECOMMENDATIONSERVICE — Deployment + Service + ServiceAccount
+# Điểm đặc biệt:
+#   - Python service (ML model)
+#   - Memory CAO nhất trong các services (450Mi limit)
+#     vì Python ML cần load model vào RAM
+#   - CPU cũng cao hơn vì inference tốn tài nguyên
+# ============================================================
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: recommendationservice
+  namespace: production
+  labels:
+    app: recommendationservice
+    app.kubernetes.io/name: recommendationservice
+    app.kubernetes.io/part-of: online-boutique
+  annotations:
+    security.policy/pss: "restricted"
+    security.policy/standard: "NSA-K8s-v1.2, CIS-EKS-5.2"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: recommendationservice
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: recommendationservice
+        app.kubernetes.io/name: recommendationservice
+        app.kubernetes.io/part-of: online-boutique
+    spec:
+      serviceAccountName: recommendationservice-sa
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: recommendationservice
+          image: PLACEHOLDER_REGISTRY/online-boutique/recommendationservice@PLACEHOLDER_DIGEST
+          ports:
+            - name: grpc
+              containerPort: 8080
+              protocol: TCP
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: PORT
+              value: "8080"
+            - name: PRODUCT_CATALOG_SERVICE_ADDR
+              value: "productcatalogservice:3550"
+            - name: DISABLE_PROFILER
+              value: "1"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "220Mi" # Python cần nhiều RAM hơn Go/Node
+            limits:
+              cpu: "200m"
+              memory: "450Mi" # ML model load vào RAM
+          readinessProbe:
+            grpc:
+              port: 8080
+            initialDelaySeconds: 15 # Python khởi động chậm hơn Go
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            grpc:
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 3
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: recommendationservice

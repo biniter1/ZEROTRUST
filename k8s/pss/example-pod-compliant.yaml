@@ -1,0 +1,112 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: production
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      # ── RULE 1: Không dùng service account mặc định ────────
+      # automountServiceAccountToken: false vì frontend
+      # không cần gọi K8s API → không cần token
+      serviceAccountName: frontend-sa
+      automountServiceAccountToken: false
+
+      # ── RULE 2: Không chạy root ở cấp Pod ─────────────────
+      securityContext:
+        runAsNonRoot: true
+        # seccompProfile: giới hạn syscalls Linux mà container gọi được
+        # RuntimeDefault = profile mặc định của container runtime
+        # Chặn các syscall nguy hiểm như ptrace, mount, etc.
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: frontend
+          image: <account>.dkr.ecr.ap-southeast-1.amazonaws.com/online-boutique/frontend@sha256:<digest>
+          # Luôn dùng digest, không dùng tag — Kyverno sẽ enforce điều này
+
+          ports:
+            - containerPort: 8080
+
+          # ── RULE 3: Security context per container ────────────
+          securityContext:
+            # Không chạy root
+            runAsNonRoot: true
+            runAsUser: 1000 # UID của user trong container
+            runAsGroup: 1000 # GID của user trong container
+
+            # readOnlyRootFilesystem: container không thể ghi vào filesystem
+            # Nếu attacker exploit được vào container → không thể
+            # ghi malware, sửa binary, tạo file backdoor
+            readOnlyRootFilesystem: true
+
+            # allowPrivilegeEscalation: false
+            # Ngăn process trong container tự leo thang quyền
+            # (ví dụ: setuid binary, sudo, etc.)
+            allowPrivilegeEscalation: false
+
+            capabilities:
+              # drop ALL: bỏ tất cả Linux capabilities
+              # Mặc định container có: NET_BIND_SERVICE, CHOWN,
+              # DAC_OVERRIDE, FOWNER, SETGID, SETUID, etc.
+              # Bỏ hết → container chỉ làm đúng việc của nó
+              drop: ["ALL"]
+              # Không add capability nào
+              # (NET_BIND_SERVICE cũng không cần nếu dùng port > 1024)
+
+          # ── RULE 4: Resource limits bắt buộc ─────────────────
+          # Không có limits → Pod có thể dùng toàn bộ CPU/RAM của node
+          # → DoS cho các pods khác
+          # Kyverno sẽ enforce: Pod không có limits → bị reject
+          resources:
+            requests:
+              cpu: "100m" # 0.1 CPU khi idle
+              memory: "64Mi"
+            limits:
+              cpu: "200m" # tối đa 0.2 CPU
+              memory: "128Mi" # tối đa 128MB RAM
+
+          # ── RULE 5: Liveness và Readiness probes ──────────────
+          # Không bắt buộc bởi PSS nhưng best practice
+          readinessProbe:
+            httpGet:
+              path: /_healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /_healthz
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 10
+
+          # ── RULE 6: Volume mounts cho writeable paths ─────────
+          # readOnlyRootFilesystem: true → app không ghi được vào filesystem
+          # Nhưng app cần ghi temp files? → mount emptyDir riêng
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp # cho temp files
+            - name: cache
+              mountPath: /root/.cache # cho app cache (nếu cần)
+
+      volumes:
+        # emptyDir: volume tạm thời trong RAM/disk của node
+        # Tự xóa khi Pod bị xóa — không persist
+        - name: tmp
+          emptyDir: {}
+        - name: cache
+          emptyDir: {}
+
+      # ── RULE 7: Không mount host paths ────────────────────
+      # PSS restricted cấm hostPath volumes
+      # Cấm hostNetwork, hostPID, hostIPC
+      # (không cần khai báo rõ, chỉ cần không có)

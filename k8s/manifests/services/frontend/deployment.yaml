@@ -1,0 +1,140 @@
+# ============================================================
+# FRONTEND SERVICE — Deployment
+#
+# Frontend là service duy nhất expose ra ngoài internet
+# Tất cả 9 services còn lại là ClusterIP (nội bộ)
+#
+# PSS restricted checklist:
+#   [x] runAsNonRoot: true
+#   [x] runAsUser: 1000 (không phải 0)
+#   [x] readOnlyRootFilesystem: true
+#   [x] allowPrivilegeEscalation: false
+#   [x] capabilities.drop: ALL
+#   [x] seccompProfile: RuntimeDefault
+#   [x] resources.limits có đầy đủ
+#   [x] automountServiceAccountToken: false
+# ============================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: production
+  labels:
+    app: frontend
+    app.kubernetes.io/name: frontend
+    app.kubernetes.io/part-of: online-boutique
+  annotations:
+    security.policy/pss: "restricted"
+    security.policy/standard: "NSA-K8s-v1.2, CIS-EKS-5.2"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: frontend
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0 # không có downtime khi update
+  template:
+    metadata:
+      labels:
+        app: frontend
+        app.kubernetes.io/name: frontend
+        app.kubernetes.io/part-of: online-boutique
+    spec:
+      # SA được tạo ở Layer 1 Flow 3
+      # frontend-sa chỉ có quyền ECR pull — không có quyền nào khác
+      serviceAccountName: frontend-sa
+      automountServiceAccountToken: false
+
+      # Pod-level security context
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: frontend
+          # Digest được inject lúc deploy bởi deploy.yml
+          # Không bao giờ dùng :latest
+          image: PLACEHOLDER_REGISTRY/online-boutique/frontend@PLACEHOLDER_DIGEST
+
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+
+          # Container-level security context — PSS restricted
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            readOnlyRootFilesystem: true # không ghi vào filesystem
+            allowPrivilegeEscalation: false # không leo thang quyền
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop: ["ALL"] # bỏ hết Linux capabilities
+
+          env:
+            - name: PORT
+              value: "8080"
+            - name: PRODUCT_CATALOG_SERVICE_ADDR
+              value: "productcatalogservice:3550"
+            - name: CURRENCY_SERVICE_ADDR
+              value: "currencyservice:7000"
+            - name: CART_SERVICE_ADDR
+              value: "cartservice:7070"
+            - name: RECOMMENDATION_SERVICE_ADDR
+              value: "recommendationservice:8080"
+            - name: CHECKOUT_SERVICE_ADDR
+              value: "checkoutservice:5050"
+            - name: AD_SERVICE_ADDR
+              value: "adservice:9555"
+            - name: SHIPPING_SERVICE_ADDR
+              value: "shippingservice:50051"
+
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "64Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+
+          readinessProbe:
+            httpGet:
+              path: /_healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 3
+
+          livenessProbe:
+            httpGet:
+              path: /_healthz
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 3
+
+          # readOnlyRootFilesystem: true nên app không ghi được vào /
+          # Nhưng app cần /tmp → mount emptyDir vào đó
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+
+      volumes:
+        - name: tmp
+          emptyDir: {}
+
+      # Phân tán Pod ra nhiều AZ — high availability
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: frontend

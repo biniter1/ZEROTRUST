@@ -1,20 +1,39 @@
-name: 🏷️ Create Release (AWS ECR)
+# ============================================================
+# RELEASE WORKFLOW — chạy khi push tag semver (v1.2.3)
+#
+# Thay đổi so với bản cũ:
+#   - ap-southeast-2 → ap-southeast-1 (đúng với Layer 1)
+#   - self-hosted → ubuntu-latest (ephemeral)
+#   - @v4, @v2 → pin bằng SHA
+#   - AWS_DEPLOY_ROLE_ARN → GHA_ECR_PUSH_ROLE_ARN (role đúng)
+#   - Tag bằng semver + verify signature sau khi retag
+#   - Không dùng docker pull/tag (không có docker daemon trên ubuntu-latest)
+#     → dùng crane để copy image giữa tags trong ECR
+# ============================================================
+
+name: Release — Tag Semver
 
 on:
   push:
     tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+'   # v1.2.3
+      - 'v[0-9]+.[0-9]+.[0-9]+'  # v1.2.3
+
+permissions:
+  contents: write   # tạo GitHub Release
+  id-token: write   # OIDC
+
+env:
+  AWS_REGION: ap-southeast-1   # FIX: đúng với Layer 1
+  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.ap-southeast-1.amazonaws.com
+  ECR_REPO_PREFIX: online-boutique
 
 jobs:
   release:
-    name: 🏷️ Tag & Release
-    runs-on: self-hosted
-    permissions:
-      contents: write
-      id-token: write
+    name: Tag & Release
+    runs-on: ubuntu-latest   # FIX: ephemeral thay self-hosted
 
     steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           fetch-depth: 0
 
@@ -22,60 +41,115 @@ jobs:
         id: version
         run: |
           VERSION="${GITHUB_REF#refs/tags/v}"
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "📦 Creating release v$VERSION"
+          SHA_SHORT=$(git rev-parse --short HEAD)
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "sha_short=${SHA_SHORT}" >> $GITHUB_OUTPUT
+          echo "Creating release v${VERSION} from sha-${SHA_SHORT}"
 
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
+      # OIDC → gha-ecr-push-role
+      # FIX: dùng đúng role ECR push, không phải deploy role
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@ececc85a0f8c18e2a3bd4e5454f09b583b27ad89  # v4.1.0
         with:
-          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ secrets.AWS_REGION || 'ap-southeast-2' }}   # FIX: Sydney
+          role-to-assume: ${{ secrets.GHA_ECR_PUSH_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 900
+          role-session-name: release-${{ github.run_id }}
 
-      - name: Login to ECR
+      - name: Login to Amazon ECR
         id: ecr-login
-        uses: aws-actions/amazon-ecr-login@v2
+        uses: aws-actions/amazon-ecr-login@062b18b96a7aff071d4dc91bc00c4c1a7945b076  # v2.0.1
 
-      - name: Retag all service images with semver
+      # Install crane — copy image trong registry mà không cần docker daemon
+      # Tốt hơn docker pull/tag vì ubuntu-latest không có docker daemon sẵn
+      - name: Install crane
+        uses: imjasonh/setup-crane@31b88efe9de28ae0ffa220711af4b408e4ab35f4  # v0.4
+
+      # Retag: sha-abc123 → v1.2.3
+      # Dùng crane copy thay vì docker pull + docker tag + docker push
+      - name: Retag all services with semver
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          SHA_SHORT=$(git rev-parse --short HEAD)
-          REGISTRY="${{ steps.ecr-login.outputs.registry }}"
+          SHA_SHORT="${{ steps.version.outputs.sha_short }}"
+          REGISTRY="${{ env.ECR_REGISTRY }}"
+          PREFIX="${{ env.ECR_REPO_PREFIX }}"
 
           SERVICES=(
             frontend cartservice productcatalogservice
             currencyservice paymentservice shippingservice
             emailservice checkoutservice recommendationservice
-            adservice loadgenerator
+            adservice
           )
 
           for svc in "${SERVICES[@]}"; do
-            SRC="${REGISTRY}/online-boutique/${svc}:sha-${SHA_SHORT}"
-            DST="${REGISTRY}/online-boutique/${svc}:${VERSION}"
-            echo "🏷️ ${svc}: sha-${SHA_SHORT} → ${VERSION}"
-            docker pull "$SRC" || { echo "⚠️ $SRC not found, skipping"; continue; }
-            docker tag "$SRC" "$DST"
-            docker push "$DST"
-            echo "✅ ${svc}:${VERSION} pushed"
+            SRC="${REGISTRY}/${PREFIX}/${svc}:sha-${SHA_SHORT}"
+            DST="${REGISTRY}/${PREFIX}/${svc}:${VERSION}"
+
+            echo "Retagging ${svc}: sha-${SHA_SHORT} → ${VERSION}"
+
+            # Kiểm tra image tồn tại trước khi copy
+            if crane digest "${SRC}" &>/dev/null; then
+              crane copy "${SRC}" "${DST}"
+              echo "${svc}:${VERSION} tagged"
+            else
+              echo "WARNING: ${SRC} not found — skipping ${svc}"
+            fi
           done
 
+      # Verify signature vẫn hợp lệ sau khi retag
+      # Signature gắn với digest (immutable) nên vẫn valid sau khi thêm tag mới
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@d7d6bc7722e3daa8354c50bcb52f4837da5e9b6a  # v3.7.0
+
+      - name: Verify signatures still valid after retag
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          REGISTRY="${{ env.ECR_REGISTRY }}"
+          PREFIX="${{ env.ECR_REPO_PREFIX }}"
+
+          SERVICES=(
+            frontend cartservice productcatalogservice
+            currencyservice paymentservice shippingservice
+            emailservice checkoutservice recommendationservice
+            adservice
+          )
+
+          for svc in "${SERVICES[@]}"; do
+            IMAGE="${REGISTRY}/${PREFIX}/${svc}:${VERSION}"
+            DIGEST=$(crane digest "${IMAGE}" 2>/dev/null || echo "SKIP")
+            [ "$DIGEST" == "SKIP" ] && continue
+
+            cosign verify \
+              --key "awskms:///${{ secrets.COSIGN_KMS_KEY_ARN }}" \
+              "${REGISTRY}/${PREFIX}/${svc}@${DIGEST}" > /dev/null
+            echo "${svc}: signature valid"
+          done
+
+      # Tạo GitHub Release — kế thừa từ pipeline cũ
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@9d7c94cfd0a1f3ed45544c887983e9fa900f0564  # v2.0.4
         with:
           generate_release_notes: true
           name: "Online Boutique v${{ steps.version.outputs.version }}"
           body: |
-            ## 🚀 Release v${{ steps.version.outputs.version }}
+            ## Release v${{ steps.version.outputs.version }}
 
-            ### Deploy lên k3d
+            ### Deploy lên EKS production
             ```bash
-            helm upgrade boutique ./helm-chart \
-              --namespace boutique-production \
-              --values helm-chart/values-production.yaml \
-              --set images.tag=${{ steps.version.outputs.version }} \
-              --atomic --wait
+            # Images đã được sign + attested — Kyverno sẽ verify tự động
+            kubectl set image deployment/<service> \
+              <service>=<account>.dkr.ecr.ap-southeast-1.amazonaws.com/online-boutique/<service>:${{ steps.version.outputs.version }} \
+              -n production
             ```
 
             ### Rollback
             ```bash
-            helm rollback boutique -n boutique-production
+            kubectl rollout undo deployment/<service> -n production
+            ```
+
+            ### Verify signature
+            ```bash
+            cosign verify \
+              --key awskms:///<key-arn> \
+              <registry>/online-boutique/<service>:${{ steps.version.outputs.version }}
             ```

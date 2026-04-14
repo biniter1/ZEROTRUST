@@ -1,0 +1,107 @@
+# ============================================================
+# CHECKOUTSERVICE — Deployment + Service + ServiceAccount
+# Điểm đặc biệt:
+#   - replicas: 2 — critical service
+#   - Nhiều env nhất vì phải gọi đến 6 services khác
+#   - SA có quyền đọc Secrets Manager prod/checkout/*
+# ============================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: checkoutservice
+  namespace: production
+  labels:
+    app: checkoutservice
+    app.kubernetes.io/name: checkoutservice
+    app.kubernetes.io/part-of: online-boutique
+  annotations:
+    security.policy/pss: "restricted"
+    security.policy/standard: "NSA-K8s-v1.2, CIS-EKS-5.2"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: checkoutservice
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: checkoutservice
+        app.kubernetes.io/name: checkoutservice
+        app.kubernetes.io/part-of: online-boutique
+    spec:
+      serviceAccountName: checkoutservice-sa
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: checkoutservice
+          image: PLACEHOLDER_REGISTRY/online-boutique/checkoutservice@PLACEHOLDER_DIGEST
+          ports:
+            - name: grpc
+              containerPort: 5050
+              protocol: TCP
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: PORT
+              value: "5050"
+            - name: PRODUCT_CATALOG_SERVICE_ADDR
+              value: "productcatalogservice:3550"
+            - name: SHIPPING_SERVICE_ADDR
+              value: "shippingservice:50051"
+            - name: PAYMENT_SERVICE_ADDR
+              value: "paymentservice:50051"
+            - name: EMAIL_SERVICE_ADDR
+              value: "emailservice:5000"
+            - name: CURRENCY_SERVICE_ADDR
+              value: "currencyservice:7000"
+            - name: CART_SERVICE_ADDR
+              value: "cartservice:7070"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "64Mi"
+            limits:
+              cpu: "300m"
+              memory: "256Mi"
+          readinessProbe:
+            grpc:
+              port: 5050
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            grpc:
+              port: 5050
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 3
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: checkoutservice

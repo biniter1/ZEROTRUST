@@ -1,0 +1,96 @@
+# ============================================================
+# PRODUCTCATALOGSERVICE — Deployment + Service + ServiceAccount
+# Điểm đặc biệt:
+#   - Đọc file products.json từ container image
+#   - readOnlyRootFilesystem: true → file đó vẫn đọc được
+#     vì readOnly chỉ block GHI, không block ĐỌC
+#   - SA chỉ có quyền ECR pull
+# ============================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: productcatalogservice
+  namespace: production
+  labels:
+    app: productcatalogservice
+    app.kubernetes.io/name: productcatalogservice
+    app.kubernetes.io/part-of: online-boutique
+  annotations:
+    security.policy/pss: "restricted"
+    security.policy/standard: "NSA-K8s-v1.2, CIS-EKS-5.2"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: productcatalogservice
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: productcatalogservice
+        app.kubernetes.io/name: productcatalogservice
+        app.kubernetes.io/part-of: online-boutique
+    spec:
+      serviceAccountName: productcatalogservice-sa
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: productcatalogservice
+          image: PLACEHOLDER_REGISTRY/online-boutique/productcatalogservice@PLACEHOLDER_DIGEST
+          ports:
+            - name: grpc
+              containerPort: 3550
+              protocol: TCP
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: PORT
+              value: "3550"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+          readinessProbe:
+            grpc:
+              port: 3550
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            grpc:
+              port: 3550
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 3
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: productcatalogservice

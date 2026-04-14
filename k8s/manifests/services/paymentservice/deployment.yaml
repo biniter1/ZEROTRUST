@@ -1,0 +1,105 @@
+# ============================================================
+# PAYMENTSERVICE — Deployment + Service + ServiceAccount
+# Điểm đặc biệt:
+#   - replicas: 2 — payment KHÔNG được down
+#   - SA có quyền đọc AWS Secrets Manager prod/payment/*
+#     (thông tin payment gateway API key)
+# ============================================================
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: paymentservice
+  namespace: production
+  labels:
+    app: paymentservice
+    app.kubernetes.io/name: paymentservice
+    app.kubernetes.io/part-of: online-boutique
+  annotations:
+    security.policy/pss: "restricted"
+    security.policy/standard: "NSA-K8s-v1.2, CIS-EKS-5.2"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: paymentservice
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: paymentservice
+        app.kubernetes.io/name: paymentservice
+        app.kubernetes.io/part-of: online-boutique
+    spec:
+      serviceAccountName: paymentservice-sa
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: paymentservice
+          image: PLACEHOLDER_REGISTRY/online-boutique/paymentservice@PLACEHOLDER_DIGEST
+          ports:
+            - name: grpc
+              containerPort: 50051
+              protocol: TCP
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: PORT
+              value: "50051"
+            - name: DISABLE_PROFILER
+              value: "1"
+            # Payment gateway API key từ ESO
+            # ESO sync từ AWS Secrets Manager prod/payment/api-key
+            - name: PAYMENT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: payment-secret
+                  key: api_key
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "64Mi"
+            limits:
+              cpu: "300m"
+              memory: "256Mi"
+          readinessProbe:
+            grpc:
+              port: 50051
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            grpc:
+              port: 50051
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 3
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: paymentservice

@@ -6,6 +6,9 @@ on:
       service:
         required: true
         type: string
+      changed:
+        required: true
+        type: boolean
       python-version:
         required: false
         type: string
@@ -17,6 +20,7 @@ on:
 
 jobs:
   ci:
+    if: inputs.changed == 'true'
     name: Python CI — ${{ inputs.service }}
     runs-on: self-hosted
     outputs:

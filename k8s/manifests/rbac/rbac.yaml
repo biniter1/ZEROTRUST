@@ -1,0 +1,327 @@
+# ============================================================
+# RBAC — Layer 3 bổ sung
+#
+# Layer 1 đã làm:
+#   - aws-auth ConfigMap: map IAM Role → K8s Group
+#   - 6 Permission Sets trong IAM Identity Center
+#   - Role/RoleBinding cho human identity
+#
+# Layer 3 bổ sung:
+#   1. Xác nhận cluster-admin không được bind thường xuyên
+#   2. Break-glass ClusterRoleBinding (tạm thời khi khẩn cấp)
+#   3. RBAC cho system components: Kyverno, ESO, Falco
+#   4. Read-only ClusterRole cho SOC monitoring
+#
+# Nguyên tắc Least Privilege:
+#   Mỗi Role chỉ có đúng quyền cần thiết
+#   Không có wildcard "*" trong production
+#   Không có cluster-admin binding thường xuyên
+#
+# Chuẩn: NSA K8s §5 · CIS EKS 5.1.x · NIST 800-207 T3
+# ============================================================
+
+# ── PHẦN 1: XÁC NHẬN KHÔNG CÓ CLUSTER-ADMIN THƯỜNG XUYÊN ────
+#
+# Tại sao cluster-admin nguy hiểm?
+#   cluster-admin = quyền làm MỌI THỨ trên cluster
+#   Nếu account bị compromise → attacker có toàn quyền
+#   Zero Trust: không ai cần quyền đó thường xuyên
+#
+# Layer 1 đã setup:
+#   AdminAccess SSO Role → k8s-admins group → cluster-admin
+#   Nhưng chỉ khi Admin login qua SSO với MFA (session 1h)
+#   Sau 1h session hết → quyền tự mất
+#
+# KHÔNG tạo ClusterRoleBinding cluster-admin cho user thường xuyên
+# Phần dưới chỉ có break-glass procedure
+
+# ── PHẦN 2: BREAK-GLASS PROCEDURE ────────────────────────────
+#
+# Break-glass = "bể kính khẩn cấp"
+# Dùng khi: cluster bị lỗi nghiêm trọng, SSO không hoạt động
+# Cách dùng:
+#   1. Admin chạy script bên dưới
+#   2. Có quyền cluster-admin trong 1 giờ
+#   3. Script tự xóa binding sau 1 giờ
+#   4. Mọi hành động được ghi vào CloudTrail + K8s audit log
+
+# ClusterRoleBinding này KHÔNG được apply thường xuyên
+# Chỉ apply khi khẩn cấp, xóa ngay sau khi xong
+# File này là TEMPLATE — không kubectl apply trực tiếp
+
+# apiVersion: rbac.authorization.k8s.io/v1
+# kind: ClusterRoleBinding
+# metadata:
+#   name: break-glass-admin
+#   annotations:
+#     security.note: "EMERGENCY USE ONLY — delete after use"
+#     created-by: "ADMIN_NAME"
+#     expires-at: "TIMESTAMP"
+# roleRef:
+#   apiGroup: rbac.authorization.k8s.io
+#   kind: ClusterRole
+#   name: cluster-admin
+# subjects:
+# - kind: User
+#   name: "ADMIN_SSO_ARN"
+#   apiGroup: rbac.authorization.k8s.io
+
+# ── PHẦN 3: RBAC CHO KYVERNO ─────────────────────────────────
+#
+# Kyverno là admission controller — cần quyền cao để:
+#   - Đọc/watch tất cả resources (để validate)
+#   - Mutate resources (để thêm digest, labels)
+#   - Tạo/xóa resources (để enforce generate rules)
+#
+# Kyverno tự tạo ClusterRole của nó khi install qua Helm
+# Phần này chỉ thêm annotation để audit rõ ràng hơn
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kyverno-reports-reader
+  annotations:
+    security.policy/purpose: "Allow SOC to read Kyverno policy reports"
+    security.policy/standard: "NSA-K8s-§5, CIS-EKS-5.1"
+rules:
+  # SOC cần đọc PolicyReport để monitor compliance
+  - apiGroups: ["wgpolicyk8s.io", "kyverno.io"]
+    resources:
+      - policyreports
+      - clusterpolicyreports
+      - admissionreports
+      - clusteradmissionreports
+    verbs: ["get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kyverno-reports-reader-binding
+  annotations:
+    security.policy/purpose: "SOC team can read policy reports"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kyverno-reports-reader
+subjects:
+  # k8s-soc group được map từ SOC SSO Role (Layer 1)
+  - kind: Group
+    name: k8s-soc
+    apiGroup: rbac.authorization.k8s.io
+
+---
+# ── PHẦN 4: RBAC CHO EXTERNAL SECRETS OPERATOR ───────────────
+#
+# ESO cần quyền để:
+#   - Đọc ExternalSecret CRD (để biết cần sync secret nào)
+#   - Tạo/update K8s Secret (để lưu secret đã sync)
+#   - Watch namespace (để phát hiện ExternalSecret mới)
+#
+# Kyverno tự tạo SA của nó khi install
+# ESO cũng vậy — nhưng cần thêm quyền đọc secrets trong namespaces
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: eso-secret-creator
+  namespace: production
+  annotations:
+    security.policy/purpose: "Allow ESO to create/update secrets in production"
+    security.policy/standard: "NSA-K8s-§6, CIS-EKS-5.3"
+rules:
+  # ESO cần tạo và update K8s Secrets
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "update", "patch", "delete", "get", "list", "watch"]
+  # ESO cần đọc ExternalSecret CRD
+  - apiGroups: ["external-secrets.io"]
+    resources:
+      - externalsecrets
+      - secretstores
+    verbs: ["get", "list", "watch", "update", "patch"]
+  # ESO cần tạo events để log hoạt động
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: eso-secret-creator-binding
+  namespace: production
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: eso-secret-creator
+subjects:
+  # ServiceAccount của ESO controller
+  # Được tạo khi install ESO qua Helm
+  - kind: ServiceAccount
+    name: external-secrets
+    namespace: external-secrets
+
+---
+# Tương tự cho namespace staging
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: eso-secret-creator
+  namespace: staging
+  annotations:
+    security.policy/purpose: "Allow ESO to create/update secrets in staging"
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "update", "patch", "delete", "get", "list", "watch"]
+  - apiGroups: ["external-secrets.io"]
+    resources: ["externalsecrets", "secretstores"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: eso-secret-creator-binding
+  namespace: staging
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: eso-secret-creator
+subjects:
+  - kind: ServiceAccount
+    name: external-secrets
+    namespace: external-secrets
+
+---
+# ── PHẦN 5: RBAC CHO FALCO ───────────────────────────────────
+#
+# Falco cần quyền đọc để monitor:
+#   - Pods, nodes (để biết context khi có alert)
+#   - Events (để đọc và tạo audit events)
+#   - Không cần write quyền nào
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: falco-reader
+  annotations:
+    security.policy/purpose: "Falco reads cluster state for runtime detection"
+    security.policy/standard: "NSA-K8s-§7, NIST-800-207-T5"
+rules:
+  - apiGroups: [""]
+    resources:
+      - nodes
+      - pods
+      - namespaces
+      - replicationcontrollers
+      - services
+      - events
+      - configmaps
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources:
+      - daemonsets
+      - deployments
+      - replicasets
+      - statefulsets
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create"] # Falco tạo K8s events khi phát hiện threat
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: falco-reader-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: falco-reader
+subjects:
+  - kind: ServiceAccount
+    name: falco
+    namespace: falco
+
+---
+# ── PHẦN 6: SOC READ-ONLY CLUSTER ROLE ───────────────────────
+#
+# SOC cần đọc nhiều thứ để monitor và investigate
+# Nhưng KHÔNG được ghi bất cứ thứ gì
+# Layer 1 đã tạo SOC SSO Role → k8s-soc group
+# Đây là ClusterRole tương ứng trong K8s
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: soc-readonly
+  annotations:
+    security.policy/purpose: "SOC team read-only access for monitoring"
+    security.policy/standard: "NSA-K8s-§5, NIST-800-207-T7"
+rules:
+  # Đọc workloads
+  - apiGroups: ["", "apps", "batch"]
+    resources:
+      - pods
+      - pods/log # đọc logs của pods
+      - deployments
+      - replicasets
+      - daemonsets
+      - statefulsets
+      - jobs
+      - cronjobs
+      - nodes
+      - namespaces
+      - events
+      - services
+      - endpoints
+    verbs: ["get", "list", "watch"]
+
+  # Đọc network policies (để investigate incident)
+  - apiGroups: ["networking.k8s.io"]
+    resources:
+      - networkpolicies
+      - ingresses
+    verbs: ["get", "list", "watch"]
+
+  # Đọc Kyverno reports
+  - apiGroups: ["wgpolicyk8s.io", "kyverno.io"]
+    resources:
+      - policyreports
+      - clusterpolicyreports
+      - admissionreports
+    verbs: ["get", "list", "watch"]
+
+  # ĐỌC secrets metadata (không đọc được value)
+  # SOC biết secret nào tồn tại nhưng không thấy content
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
+    # Lưu ý: kubectl get secret không hiện value
+    # Muốn đọc value phải có thêm quyền riêng
+
+
+# KHÔNG có write verbs nào
+# KHÔNG có delete verbs nào
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: soc-readonly-binding
+  annotations:
+    security.policy/purpose: "Bind SOC group to readonly role"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: soc-readonly
+subjects:
+  # k8s-soc group được map từ SOC SSO Role trong aws-auth (Layer 1)
+  - kind: Group
+    name: k8s-soc
+    apiGroup: rbac.authorization.k8s.io

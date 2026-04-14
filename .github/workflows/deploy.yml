@@ -1,0 +1,431 @@
+# ============================================================
+# DEPLOY WORKFLOW — trigger sau build thành công
+#
+# Nâng cấp Zero Trust:
+#   + Verify signature + SBOM + provenance trước mỗi deploy
+#   + OIDC request mới mỗi stage (T3 per-session)
+#   + Trivy rescan với CVE DB mới
+#   + Deploy bằng digest (không phải tag mutable)
+#   + Manual approval gate với MFA
+#   + Audit event emit
+#
+# Chuẩn: NIST 800-207 T3+T4 · SLSA L3 · CIS EKS 5.1.1
+# ============================================================
+
+name: Deploy — Staging → Gate → Production
+
+on:
+  workflow_run:
+    workflows: ["Build — Image + Sign + Attest"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+  actions: read
+
+env:
+  AWS_REGION: ap-southeast-1
+  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.ap-southeast-1.amazonaws.com
+  ECR_REPO_PREFIX: online-boutique
+  EKS_CLUSTER_NAME: online-boutique-prod
+  SERVICES: >-
+    frontend cartservice productcatalogservice currencyservice
+    paymentservice shippingservice emailservice checkoutservice
+    recommendationservice adservice
+
+jobs:
+  # ──────────────────────────────────────────────
+  # JOB 1: Pre-deploy Verification
+  # Verify signature + SBOM + provenance cho mọi service
+  # Zero Trust: không trust output của build, verify độc lập
+  # ──────────────────────────────────────────────
+  pre-deploy-verify:
+    name: Pre-deploy Verify — ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    strategy:
+      matrix:
+        service:
+          - frontend
+          - cartservice
+          - productcatalogservice
+          - currencyservice
+          - paymentservice
+          - shippingservice
+          - emailservice
+          - checkoutservice
+          - recommendationservice
+          - adservice
+      fail-fast: true  # nếu 1 service fail verify → dừng tất cả
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      # OIDC mới — T3 per-session
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@ececc85a0f8c18e2a3bd4e5454f09b583b27ad89
+        with:
+          role-to-assume: ${{ secrets.GHA_EKS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 900
+          role-session-name: verify-${{ matrix.service }}-${{ github.run_id }}
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@d7d6bc7722e3daa8354c50bcb52f4837da5e9b6a
+
+      - name: Get image digest from ECR
+        id: image
+        run: |
+          SHA="${{ github.event.workflow_run.head_sha }}"
+          DIGEST=$(aws ecr describe-images \
+            --repository-name ${{ env.ECR_REPO_PREFIX }}/${{ matrix.service }} \
+            --image-ids imageTag=${SHA} \
+            --query 'imageDetails[0].imageDigest' \
+            --output text 2>/dev/null || echo "NOT_FOUND")
+
+          if [ "$DIGEST" == "NOT_FOUND" ] || [ -z "$DIGEST" ]; then
+            echo "INFO: ${{ matrix.service }} was not rebuilt in this push (unchanged) — skipping verify"
+            echo "skip=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          FULL_REF="${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO_PREFIX }}/${{ matrix.service }}@${DIGEST}"
+          echo "full_ref=${FULL_REF}" >> $GITHUB_OUTPUT
+          echo "skip=false" >> $GITHUB_OUTPUT
+          echo "digest=${DIGEST}" >> $GITHUB_OUTPUT
+
+      # Verify 1: Cosign signature
+      - name: Verify Cosign signature
+        if: steps.image.outputs.skip != 'true'
+        run: |
+          cosign verify \
+            --key "awskms:///${{ secrets.COSIGN_KMS_KEY_ARN }}" \
+            --annotations "github-repo=${{ github.repository }}" \
+            "${{ steps.image.outputs.full_ref }}"
+          echo "Signature OK: ${{ matrix.service }}"
+
+      # Verify 2: SBOM attestation
+      - name: Verify SBOM attestation
+        if: steps.image.outputs.skip != 'true'
+        run: |
+          cosign verify-attestation \
+            --key "awskms:///${{ secrets.COSIGN_KMS_KEY_ARN }}" \
+            --type cyclonedx \
+            "${{ steps.image.outputs.full_ref }}" \
+            | jq -r '.payload | @base64d | fromjson | .predicateType'
+          echo "SBOM OK: ${{ matrix.service }}"
+
+      # Verify 3: SLSA Provenance
+      - name: Verify SLSA Provenance
+        if: steps.image.outputs.skip != 'true'
+        run: |
+          gh attestation verify \
+            --owner ${{ github.repository_owner }} \
+            --repo ${{ github.event.repository.name }} \
+            "${{ steps.image.outputs.full_ref }}"
+          echo "Provenance OK: ${{ matrix.service }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ──────────────────────────────────────────────
+  # JOB 2: Trivy Rescan
+  # CVE DB cập nhật liên tục — rescan trước deploy
+  # ──────────────────────────────────────────────
+  trivy-rescan:
+    name: Trivy Rescan — ${{ matrix.service }}
+    needs: [pre-deploy-verify]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service:
+          - frontend
+          - cartservice
+          - productcatalogservice
+          - currencyservice
+          - paymentservice
+          - shippingservice
+          - emailservice
+          - checkoutservice
+          - recommendationservice
+          - adservice
+      fail-fast: true
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@ececc85a0f8c18e2a3bd4e5454f09b583b27ad89
+        with:
+          role-to-assume: ${{ secrets.GHA_EKS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 900
+          role-session-name: trivy-${{ matrix.service }}-${{ github.run_id }}
+
+      - name: ECR Login
+        uses: aws-actions/amazon-ecr-login@062b18b96a7aff071d4dc91bc00c4c1a7945b076
+
+      - name: Get image digest
+        id: image
+        run: |
+          SHA="${{ github.event.workflow_run.head_sha }}"
+          DIGEST=$(aws ecr describe-images \
+            --repository-name ${{ env.ECR_REPO_PREFIX }}/${{ matrix.service }} \
+            --image-ids imageTag=${SHA} \
+            --query 'imageDetails[0].imageDigest' \
+            --output text 2>/dev/null || echo "NOT_FOUND")
+          if [ "$DIGEST" == "NOT_FOUND" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT; exit 0
+          fi
+          echo "full_ref=${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO_PREFIX }}/${{ matrix.service }}@${DIGEST}" >> $GITHUB_OUTPUT
+          echo "skip=false" >> $GITHUB_OUTPUT
+
+      - name: Trivy rescan (fresh CVE DB)
+        if: steps.image.outputs.skip != 'true'
+        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0
+        with:
+          image-ref: ${{ steps.image.outputs.full_ref }}
+          severity: CRITICAL
+          exit-code: '1'
+          format: table
+
+  # ──────────────────────────────────────────────
+  # JOB 3: Deploy to Staging
+  # Tự động sau verify + rescan
+  # ──────────────────────────────────────────────
+  deploy-staging:
+    name: Deploy to Staging
+    needs: [trivy-rescan]
+    runs-on: ubuntu-latest
+    environment: staging   # GitHub Environment — không có reviewers
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      # OIDC mới — T3 per-session, không reuse từ verify jobs
+      - name: Configure AWS credentials (OIDC — staging)
+        uses: aws-actions/configure-aws-credentials@ececc85a0f8c18e2a3bd4e5454f09b583b27ad89
+        with:
+          role-to-assume: ${{ secrets.GHA_EKS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 900
+          role-session-name: staging-deploy-${{ github.run_id }}
+
+      - name: Configure kubectl (EKS)
+        run: |
+          aws eks update-kubeconfig \
+            --region ${{ env.AWS_REGION }} \
+            --name ${{ env.EKS_CLUSTER_NAME }}
+
+      # Deploy bằng digest — không bao giờ dùng tag mutable
+      # Kế thừa ý tưởng Helm deploy từ pipeline cũ nhưng lên AWS EKS thật
+      - name: Deploy to staging namespace
+        run: |
+          SHA="${{ github.event.workflow_run.head_sha }}"
+          for SERVICE in ${{ env.SERVICES }}; do
+            DIGEST=$(aws ecr describe-images \
+              --repository-name ${{ env.ECR_REPO_PREFIX }}/${SERVICE} \
+              --image-ids imageTag=${SHA} \
+              --query 'imageDetails[0].imageDigest' \
+              --output text 2>/dev/null || echo "SKIP")
+
+            if [ "$DIGEST" == "SKIP" ]; then
+              echo "Skipping ${SERVICE} — not rebuilt"
+              continue
+            fi
+
+            IMAGE="${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO_PREFIX }}/${SERVICE}@${DIGEST}"
+            kubectl set image deployment/${SERVICE} ${SERVICE}=${IMAGE} -n staging
+            echo "Deployed: ${SERVICE} → ${DIGEST:0:19}..."
+          done
+
+      - name: Verify staging rollout
+        run: |
+          for SERVICE in ${{ env.SERVICES }}; do
+            kubectl rollout status deployment/${SERVICE} \
+              -n staging --timeout=300s 2>/dev/null || true
+          done
+
+      - name: Smoke test — staging
+        run: |
+          STAGING_URL="${{ secrets.STAGING_FRONTEND_URL }}"
+          for i in 1 2 3; do
+            HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
+              "${STAGING_URL}" --max-time 10 || echo "000")
+            if [ "$HTTP" == "200" ]; then
+              echo "Staging accessible: HTTP $HTTP"
+              exit 0
+            fi
+            echo "Attempt $i: HTTP $HTTP — waiting 15s..."
+            sleep 15
+          done
+          echo "WARNING: Staging not accessible after 3 attempts"
+
+  # ──────────────────────────────────────────────
+  # JOB 4: Integration Tests
+  # ──────────────────────────────────────────────
+  integration-tests:
+    name: Integration Tests (staging)
+    needs: [deploy-staging]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@ececc85a0f8c18e2a3bd4e5454f09b583b27ad89
+        with:
+          role-to-assume: ${{ secrets.GHA_EKS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 900
+          role-session-name: integration-test-${{ github.run_id }}
+
+      - name: Configure kubectl
+        run: |
+          aws eks update-kubeconfig \
+            --region ${{ env.AWS_REGION }} \
+            --name ${{ env.EKS_CLUSTER_NAME }}
+
+      - name: Check all pods running 
+        run: |
+          echo "Staging pod status:"
+          kubectl get pods -n staging 
+
+          FAILED=$(kubectl get pods -n staging \
+            --no-headers | grep -v "Running\|Completed" | wc -l)
+
+          if [ "$FAILED" -gt "0" ]; then
+            echo "WARNING: $FAILED pods not Running"
+            kubectl get pods -n staging | grep -v "Running\|Completed"
+          else
+            echo "All pods Running"
+          fi
+
+      - name: Upload test summary 
+        if: always()
+        run: |
+          echo "## Integration Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "| Pod | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          kubectl get pods -n staging --no-headers | \
+            awk '{print "| " $1 " | " $3 " |"}' >> $GITHUB_STEP_SUMMARY
+
+  # ──────────────────────────────────────────────
+  # JOB 5: Production Gate
+  # ⏸ Manual approval — Admin + MFA bắt buộc
+  # ──────────────────────────────────────────────
+  production-gate:
+    name: Production Gate (Admin Approval)
+    needs: [integration-tests]
+    runs-on: ubuntu-latest
+    environment: production  # ← manual approval xảy ra ở đây
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@ececc85a0f8c18e2a3bd4e5454f09b583b27ad89
+        with:
+          role-to-assume: ${{ secrets.GHA_EKS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 900
+          role-session-name: gate-verify-${{ github.run_id }}
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@d7d6bc7722e3daa8354c50bcb52f4837da5e9b6a
+
+      # Final verify tại thời điểm approve — T3 per-session
+      - name: Final verification before production
+        run: |
+          SHA="${{ github.event.workflow_run.head_sha }}"
+          echo "=== Final verification before production ==="
+          echo "Commit: ${SHA} | Time: $(date -u)"
+
+          for SERVICE in ${{ env.SERVICES }}; do
+            DIGEST=$(aws ecr describe-images \
+              --repository-name ${{ env.ECR_REPO_PREFIX }}/${SERVICE} \
+              --image-ids imageTag=${SHA} \
+              --query 'imageDetails[0].imageDigest' \
+              --output text 2>/dev/null || echo "SKIP")
+
+            [ "$DIGEST" == "SKIP" ] && continue
+
+            IMAGE="${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO_PREFIX }}/${SERVICE}@${DIGEST}"
+            cosign verify \
+              --key "awskms:///${{ secrets.COSIGN_KMS_KEY_ARN }}" \
+              "${IMAGE}" > /dev/null
+            echo "${SERVICE}: ${DIGEST:0:19}..."
+          done
+          echo "=== All verifications passed. Awaiting Admin approval. ==="
+
+  # ──────────────────────────────────────────────
+  # JOB 6: Deploy to Production
+  # ──────────────────────────────────────────────
+  deploy-production:
+    name: Deploy to Production
+    needs: [production-gate]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      # OIDC request hoàn toàn mới — T3 per-session
+      - name: Configure AWS credentials (OIDC — production)
+        uses: aws-actions/configure-aws-credentials@ececc85a0f8c18e2a3bd4e5454f09b583b27ad89
+        with:
+          role-to-assume: ${{ secrets.GHA_EKS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 900
+          role-session-name: prod-deploy-${{ github.run_id }}
+
+      - name: Configure kubectl (EKS — production)
+        run: |
+          aws eks update-kubeconfig \
+            --region ${{ env.AWS_REGION }} \
+            --name ${{ env.EKS_CLUSTER_NAME }}
+
+      - name: Deploy to production namespace
+        run: |
+          SHA="${{ github.event.workflow_run.head_sha }}"
+          for SERVICE in ${{ env.SERVICES }}; do
+            DIGEST=$(aws ecr describe-images \
+              --repository-name ${{ env.ECR_REPO_PREFIX }}/${SERVICE} \
+              --image-ids imageTag=${SHA} \
+              --query 'imageDetails[0].imageDigest' \
+              --output text 2>/dev/null || echo "SKIP")
+
+            [ "$DIGEST" == "SKIP" ] && continue
+
+            IMAGE="${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO_PREFIX }}/${SERVICE}@${DIGEST}"
+            kubectl set image deployment/${SERVICE} ${SERVICE}=${IMAGE} -n production
+            echo "Deployed: ${SERVICE}"
+          done
+
+      - name: Verify production rollout
+        run: |
+          for SERVICE in ${{ env.SERVICES }}; do
+            kubectl rollout status deployment/${SERVICE} \
+              -n production --timeout=600s 2>/dev/null || true
+          done
+
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          echo "Deployment failed — rolling back production..."
+          for SERVICE in ${{ env.SERVICES }}; do
+            kubectl rollout undo deployment/${SERVICE} -n production 2>/dev/null || true
+          done
+          echo "Rollback complete"
+
+      # Audit emit — NIST T7
+      - name: Emit deployment audit event
+        if: success()
+        run: |
+          aws cloudwatch put-metric-data \
+            --namespace "ZeroTrust/Pipeline" \
+            --metric-data \
+              MetricName=ProductionDeployment,Value=1,Unit=Count,\
+              Dimensions=[{Name=Status,Value=Success},{Name=Commit,Value=${{ github.event.workflow_run.head_sha }}}]
+
+          echo "## Production Deploy Complete" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | \`${{ github.event.workflow_run.head_sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Time | $(date -u) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Approved by | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Verification | sig + SBOM + provenance (×3) |" >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,102 @@
+# ============================================================
+# CARTSERVICE — Deployment + Service + ServiceAccount
+# Điểm đặc biệt:
+#   - Kết nối Redis (ElastiCache) — địa chỉ inject từ ESO Secret
+#   - replicas: 2 vì cart là critical (user mất hàng nếu down)
+#   - Memory cao hơn vì cache data trong RAM
+# ============================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cartservice
+  namespace: production
+  labels:
+    app: cartservice
+    app.kubernetes.io/name: cartservice
+    app.kubernetes.io/part-of: online-boutique
+  annotations:
+    security.policy/pss: "restricted"
+    security.policy/standard: "NSA-K8s-v1.2, CIS-EKS-5.2"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: cartservice
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: cartservice
+        app.kubernetes.io/name: cartservice
+        app.kubernetes.io/part-of: online-boutique
+    spec:
+      serviceAccountName: cartservice-sa
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: cartservice
+          image: PLACEHOLDER_REGISTRY/online-boutique/cartservice@PLACEHOLDER_DIGEST
+          ports:
+            - name: grpc
+              containerPort: 7070
+              protocol: TCP
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: LISTEN_ADDR
+              value: "0.0.0.0:7070"
+            # REDIS_ADDR inject từ ESO Secret — không hardcode
+            # ESO sẽ sync từ AWS Secrets Manager → K8s Secret "cart-redis-secret"
+            - name: REDIS_ADDR
+              valueFrom:
+                secretKeyRef:
+                  name: cart-redis-secret
+                  key: redis_addr
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          readinessProbe:
+            grpc: # cartservice dùng gRPC, không phải HTTP
+              port: 7070
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            grpc:
+              port: 7070
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 3
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: cartservice

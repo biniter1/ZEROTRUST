@@ -1,0 +1,108 @@
+# ============================================================
+# ADSERVICE — Deployment + Service + ServiceAccount
+# Điểm đặc biệt:
+#   - Java service (JVM) — khởi động chậm nhất
+#   - Memory cao: JVM cần heap space
+#   - initialDelaySeconds cao hơn vì JVM warm-up
+#   - SA chỉ có quyền CloudWatch metrics (send custom metrics)
+# ============================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: adservice
+  namespace: production
+  labels:
+    app: adservice
+    app.kubernetes.io/name: adservice
+    app.kubernetes.io/part-of: online-boutique
+  annotations:
+    security.policy/pss: "restricted"
+    security.policy/standard: "NSA-K8s-v1.2, CIS-EKS-5.2"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: adservice
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: adservice
+        app.kubernetes.io/name: adservice
+        app.kubernetes.io/part-of: online-boutique
+    spec:
+      serviceAccountName: adservice-sa
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: adservice
+          image: PLACEHOLDER_REGISTRY/online-boutique/adservice@PLACEHOLDER_DIGEST
+          ports:
+            - name: grpc
+              containerPort: 9555
+              protocol: TCP
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: PORT
+              value: "9555"
+            - name: DISABLE_STATS
+              value: "1"
+            # JVM options: giới hạn heap để không vượt memory limit
+            # -Xms = initial heap, -Xmx = max heap
+            # Đặt thấp hơn memory limit để JVM không bị OOMKilled
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms150m -Xmx250m"
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "180Mi" # JVM cần nhiều RAM
+            limits:
+              cpu: "300m"
+              memory: "300Mi"
+          readinessProbe:
+            grpc:
+              port: 9555
+            initialDelaySeconds: 30 # JVM khởi động chậm — cần đợi lâu hơn
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            grpc:
+              port: 9555
+            initialDelaySeconds: 40 # Đợi JVM warm-up hoàn toàn
+            periodSeconds: 10
+            failureThreshold: 3
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            # JVM cần ghi temp files vào /tmp/hsperfdata_*
+            - name: jvm-tmp
+              mountPath: /root
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: jvm-tmp
+          emptyDir: {}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: adservice
