@@ -1,0 +1,107 @@
+# ============================================================
+# KUBERNETES AUDIT POLICY
+#
+# Chuẩn: NSA K8s §7 · NIST 800-207 T7
+# ============================================================
+
+apiVersion: audit.k8s.io/v1
+kind: Policy
+omitStages:
+  - RequestReceived
+
+rules:
+  - level: None
+    userGroups: ["system:serviceaccounts:kube-system"]
+    verbs: ["get", "list", "watch"]
+    resources:
+      - group: ""
+        resources:
+          - pods
+          - services
+          - endpoints
+          - endpointslices
+          - configmaps
+    namespaces: ["kube-system"]
+
+  # 2. kube-proxy (network spam)
+  - level: None
+    users:
+      - system:kube-proxy
+    verbs: ["watch", "list"]
+    resources:
+      - group: ""
+        resources:
+          - endpoints
+          - services
+          - endpointslices
+
+  # 3. kubelet & node agents
+  - level: None
+    users:
+      - kubelet
+      - system:node-problem-detector
+    verbs: ["get", "list", "watch"]
+    resources:
+      - group: ""
+        resources:
+          - nodes
+          - pods
+          - configmaps
+          - secrets
+
+  #  RULE 3: SECRETS
+  - level: Metadata
+    resources:
+      - group: ""
+        resources: ["secrets", "configmaps", "serviceaccounts/token"]
+      - group: "authentication.k8s.io"
+        resources: ["tokenreviews"]
+
+  # ── RULE 4: Security-sensitive resources
+  - level: RequestResponse
+    resources:
+      - group: "rbac.authorization.k8s.io"
+        resources:
+          - clusterroles
+          - clusterrolebindings
+          - roles
+          - rolebindings
+      - group: "networking.k8s.io"
+        resources: ["networkpolicies"]
+      - group: ""
+        resources: ["serviceaccounts"]
+      - group: "kyverno.io" # thay đổi Kyverno policy cũng cần log
+        resources: ["clusterpolicies", "policies"]
+
+  # ── RULE 5: Pod creation/deletion
+  - level: Request
+    verbs: ["create", "update", "patch", "delete", "deletecollection"]
+    resources:
+      - group: ""
+        resources: ["pods", "pods/exec", "pods/portforward"]
+      - group: "apps"
+        resources: ["deployments", "replicasets", "daemonsets", "statefulsets"]
+
+  # ── RULE 6: pods/exec đặc biệt
+
+  - level: RequestResponse
+    verbs: ["create"]
+    resources:
+      - group: ""
+        resources: ["pods/exec", "pods/portforward", "pods/attach"]
+
+  # ── RULE 7: Authentication failures ──────────────────────────
+  - level: RequestResponse
+    verbs: ["create"]
+    resources:
+      - group: "authentication.k8s.io"
+        resources: ["tokenreviews"]
+      - group: "authorization.k8s.io"
+        resources: ["subjectaccessreviews", "localsubjectaccessreviews"]
+
+  # ── RULE 8: Tất cả còn lại — log metadata ────────────────────
+  # Default: log metadata cho mọi thứ chưa được cover ở trên
+  # Đảm bảo không bỏ sót gì
+  - level: Metadata
+    omitStages:
+      - RequestReceived

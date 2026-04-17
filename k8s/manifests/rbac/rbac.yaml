@@ -84,7 +84,6 @@ metadata:
     security.policy/purpose: "Allow SOC to read Kyverno policy reports"
     security.policy/standard: "NSA-K8s-§5, CIS-EKS-5.1"
 rules:
-  # SOC cần đọc PolicyReport để monitor compliance
   - apiGroups: ["wgpolicyk8s.io", "kyverno.io"]
     resources:
       - policyreports

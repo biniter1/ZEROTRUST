@@ -7,12 +7,17 @@ resource "aws_eks_cluster" "cluster" {
     subnet_ids              = var.private_subnets
     security_group_ids      = [var.eks_node_sg_id]
     endpoint_private_access = true
-    endpoint_public_access  = true
+    endpoint_public_access  = false
   }
 
   # Enable control plane logging
   enabled_cluster_log_types = ["api", "audit", "authenticator", "controllerManager", "scheduler"]
-
+  encryption_config {
+    provider {
+      key_arn = aws_kms_key.eks.arn
+    }
+    resources = ["secrets"]
+  }
   tags = {
     Name        = "${var.name_project}-cluster"
     Environment = var.Environment

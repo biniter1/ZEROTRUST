@@ -48,7 +48,14 @@ module "security_group" {
   source = "./modules/security"
   vpc_id = module.vpc.vpc_id
 }
-
+# ──────────────────────────────────────────
+# KMS
+# ──────────────────────────────────────────
+module "kms" {
+  source = "./modules/kms"
+  account_id = var.account_id
+  aws_region = var.aws_region
+}
 # ──────────────────────────────────────────
 # EKS Cluster (Control Plane)
 # ──────────────────────────────────────────
@@ -74,5 +81,14 @@ module "eks_node" {
   eks_node_role_arn  = module.iam.eks_node_role_arn
   eks_node_role_name = module.iam.eks_node_role_name
 
+  depends_on = [module.eks_cluster]
+}
+
+# ──────────────────────────────────────────
+# CloudWatch Log
+# ──────────────────────────────────────────
+module "cloudwatch" {
+  source = "./modules/cloudwacth"
+  cluster_name = module.eks_cluster.cluster_name
   depends_on = [module.eks_cluster]
 }

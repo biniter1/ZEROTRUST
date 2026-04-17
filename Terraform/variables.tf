@@ -18,7 +18,9 @@ variable "Environment" {
   description = "Environment (Development, Staging, Production)"
   default     = "Development"
 }
-
+variable "account_id" {
+  type = string
+}
 # ──────────────────────────────────────────
 # VPC
 # ──────────────────────────────────────────

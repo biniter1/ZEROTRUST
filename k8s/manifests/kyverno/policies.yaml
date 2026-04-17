@@ -1,0 +1,368 @@
+# ── POLICY 1: VERIFY IMAGE SIGNATURE ─────────────────────────
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: verify-image-signature
+  annotations:
+    policies.kyverno.io/title: Verify Cosign Image Signature
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: critical
+    policies.kyverno.io/description: >
+      Block any Pod using an image not signed by the organization
+      Cosign KMS key. Verifies signature, SBOM, and SLSA provenance.
+      Covers containers, initContainers, and ephemeralContainers.
+    security.policy/standard: "SLSA-L3, NIST-800-207-T4, NSA-K8s-§3"
+spec:
+  validationFailureAction: Enforce
+  background: true
+  failurePolicy: Fail
+
+  rules:
+    - name: check-image-signature
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [production, staging]
+
+      verifyImages:
+        # ── Verify Cosign signature (KMS) ──
+        - imageReferences:
+            - "*.dkr.ecr.ap-southeast-1.amazonaws.com/online-boutique/*"
+          mutateDigest: true
+          verifyDigest: true
+          attestors:
+            - entries:
+                - keys:
+                    kms: "awskms:///arn:aws:kms:ap-southeast-1:ACCOUNT_ID:key/KEY_ID"
+
+        # ── Verify SBOM attestation ──
+        - imageReferences:
+            - "*.dkr.ecr.ap-southeast-1.amazonaws.com/online-boutique/*"
+          attestations:
+            - predicateType: https://cyclonedx.org/bom
+              attestors:
+                - entries:
+                    - keys:
+                        kms: "awskms:///arn:aws:kms:ap-southeast-1:ACCOUNT_ID:key/KEY_ID"
+
+        # ── Verify SLSA Provenance + digest binding ──
+        # FIX 2: imageReferences dùng digest glob để enforce
+        # provenance subject phải match chính xác image digest
+        # Attacker không thể reuse provenance của image khác
+        - imageReferences:
+            - "*.dkr.ecr.ap-southeast-1.amazonaws.com/online-boutique/*@sha256:*"
+          attestations:
+            - predicateType: https://slsa.dev/provenance/v1
+              # attestations.conditions: check nội dung của provenance
+              conditions:
+                - all:
+                    # build từ đúng repo
+                    - key: "{{ attestation.predicate.buildDefinition.externalParameters.workflow.repository }}"
+                      operator: Equals
+                      value: "https://github.com/YOUR_ORG/YOUR_REPO"
+                    # build từ main branch
+                    - key: "{{ attestation.predicate.buildDefinition.externalParameters.workflow.ref }}"
+                      operator: Equals
+                      value: "refs/heads/main"
+              attestors:
+                - entries:
+                    - keyless:
+                        subject: "https://github.com/YOUR_ORG/YOUR_REPO/.github/workflows/build.yml@refs/heads/main"
+                        issuer: "https://token.actions.githubusercontent.com"
+
+    # FIX 1: ephemeralContainers — attack vector phổ biến nhất
+    # kubectl debug pod -it --image=evil-image → bypass mọi policy nếu không có rule này
+    - name: check-ephemeral-containers
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [production, staging]
+              operations: [CREATE, UPDATE]
+      validate:
+        foreach:
+          - list: "request.object.spec.ephemeralContainers"
+            deny:
+              conditions:
+                any:
+                  - key: "{{ element.image }}"
+                    operator: NotMatches
+                    value: "^[0-9]+\\.dkr\\.ecr\\.ap-southeast-1\\.amazonaws\\.com/online-boutique/.*"
+                  - key: "{{ element.image }}"
+                    operator: NotContains
+                    value: "@sha256:"
+
+---
+# ── POLICY 2: BLOCK MUTABLE TAGS ─────────────────────────────
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: block-mutable-tags
+spec:
+  validationFailureAction: Enforce
+  background: true
+
+  rules:
+    - name: require-image-digest
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [production, staging]
+
+      validate:
+        foreach:
+          # containers
+          - list: "request.object.spec.containers"
+            deny:
+              conditions:
+                any:
+                  - key: "{{ element.image }}"
+                    operator: Matches
+                    value: ".*:latest$" # regex: kết thúc bằng :latest
+                  - key: "{{ element.image }}"
+                    operator: Matches
+                    value: ".*:latest@.*" # latest kết hợp digest vẫn block
+                  - key: "{{ element.image }}"
+                    operator: NotContains
+                    value: "@sha256:"
+          - list: "request.object.spec.initContainers"
+            deny:
+              conditions:
+                any:
+                  - key: "{{ element.image }}"
+                    operator: Matches
+                    value: ".*:latest$"
+                  - key: "{{ element.image }}"
+                    operator: NotContains
+                    value: "@sha256:"
+          - list: "request.object.spec.ephemeralContainers"
+            deny:
+              conditions:
+                any:
+                  - key: "{{ element.image }}"
+                    operator: Matches
+                    value: ".*:latest$"
+                  - key: "{{ element.image }}"
+                    operator: NotContains
+                    value: "@sha256:"
+
+---
+# ── POLICY 3: REQUIRE RESOURCE LIMITS ────────────────────────
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-resource-limits
+spec:
+  validationFailureAction: Enforce
+  background: true
+
+  rules:
+    - name: check-container-resources
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [production, staging]
+
+      validate:
+        foreach:
+          - list: "request.object.spec.containers"
+            deny:
+              conditions:
+                any:
+                  - key: "{{ element.resources.limits.cpu | length(@) }}"
+                    operator: Equals
+                    value: 0
+                  - key: "{{ element.resources.limits.memory | length(@) }}"
+                    operator: Equals
+                    value: 0
+                  - key: "{{ element.resources.requests.cpu | length(@) }}"
+                    operator: Equals
+                    value: 0
+                  - key: "{{ element.resources.requests.memory | length(@) }}"
+                    operator: Equals
+                    value: 0
+
+          # initContainers cũng phải có limits
+          - list: "request.object.spec.initContainers"
+            deny:
+              conditions:
+                any:
+                  - key: "{{ element.resources.limits.cpu | length(@) }}"
+                    operator: Equals
+                    value: 0
+                  - key: "{{ element.resources.limits.memory | length(@) }}"
+                    operator: Equals
+                    value: 0
+
+---
+# ── POLICY 4: DENY PRIVILEGED + HOST ACCESS ──────────────────
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: deny-privileged-containers
+spec:
+  validationFailureAction: Enforce
+  background: true
+
+  rules:
+    # Rule 1: Block privileged containers — dùng foreach để cover ALL containers
+    - name: deny-privileged
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [production, staging]
+
+      validate:
+        message: "privileged: true is not allowed."
+        foreach:
+          # containers
+          - list: "request.object.spec.containers"
+            deny:
+              conditions:
+                any:
+                  - key: "{{ element.securityContext.privileged }}"
+                    operator: Equals
+                    value: true
+          # initContainers
+          - list: "request.object.spec.initContainers"
+            deny:
+              conditions:
+                any:
+                  - key: "{{ element.securityContext.privileged }}"
+                    operator: Equals
+                    value: true
+          # FIX 1: ephemeralContainers
+          - list: "request.object.spec.ephemeralContainers"
+            deny:
+              conditions:
+                any:
+                  - key: "{{ element.securityContext.privileged }}"
+                    operator: Equals
+                    value: true
+
+    # Rule 2: Block hostNetwork, hostPID, hostIPC
+    - name: deny-host-namespaces
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [production, staging]
+      validate:
+        message: "hostNetwork, hostPID, hostIPC are not allowed."
+        deny:
+          conditions:
+            any:
+              - key: "{{ request.object.spec.hostNetwork }}"
+                operator: Equals
+                value: true
+              - key: "{{ request.object.spec.hostPID }}"
+                operator: Equals
+                value: true
+              - key: "{{ request.object.spec.hostIPC }}"
+                operator: Equals
+                value: true
+
+    # Rule 3: Block hostPath volumes
+    # FIX 5: dùng AnyIn + Exists thay pattern null — chặt hơn, không bị bypass
+    - name: deny-host-path
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [production, staging]
+      validate:
+        message: "hostPath volumes are not allowed. Use emptyDir instead."
+        deny:
+          conditions:
+            any:
+              - key: "{{ request.object.spec.volumes[].hostPath | length(@) }}"
+                operator: GreaterThan
+                value: 0
+
+---
+# ── POLICY 5: ENFORCE SECURITYCONTEXT ────────────────────────
+# FIX 6: Kyverno enforce securityContext tối thiểu
+# PSS đã enforce ở namespace label, nhưng Zero Trust = verify twice
+# Nếu PSS bị misconfigure → Kyverno vẫn chặn
+# "Never assume a previous control is working"
+
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: enforce-security-context
+spec:
+  validationFailureAction: Enforce
+  background: true
+
+  rules:
+    - name: enforce-container-security-context
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [production, staging]
+
+      validate:
+        foreach:
+          # Check containers
+          - list: "request.object.spec.containers"
+            deny:
+              conditions:
+                any:
+                  # runAsNonRoot phải là true
+                  - key: "{{ element.securityContext.runAsNonRoot }}"
+                    operator: NotEquals
+                    value: true
+                  # readOnlyRootFilesystem phải là true
+                  - key: "{{ element.securityContext.readOnlyRootFilesystem }}"
+                    operator: NotEquals
+                    value: true
+                  # allowPrivilegeEscalation phải là false
+                  - key: "{{ element.securityContext.allowPrivilegeEscalation }}"
+                    operator: NotEquals
+                    value: false
+                  # capabilities.drop phải có ALL
+                  - key: "ALL"
+                    operator: AnyNotIn
+                    value: "{{ element.securityContext.capabilities.drop }}"
+
+          # Check initContainers
+          - list: "request.object.spec.initContainers"
+            deny:
+              conditions:
+                any:
+                  - key: "{{ element.securityContext.runAsNonRoot }}"
+                    operator: NotEquals
+                    value: true
+                  - key: "{{ element.securityContext.readOnlyRootFilesystem }}"
+                    operator: NotEquals
+                    value: true
+                  - key: "{{ element.securityContext.allowPrivilegeEscalation }}"
+                    operator: NotEquals
+                    value: false
+                  - key: "ALL"
+                    operator: AnyNotIn
+                    value: "{{ element.securityContext.capabilities.drop }}"
+
+    # Pod-level: runAsNonRoot + seccompProfile
+    - name: enforce-pod-security-context
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [production, staging]
+
+      validate:
+        deny:
+          conditions:
+            any:
+              - key: "{{ request.object.spec.securityContext.runAsNonRoot }}"
+                operator: NotEquals
+                value: true
+              - key: "{{ request.object.spec.securityContext.seccompProfile.type }}"
+                operator: NotEquals
+                value: "RuntimeDefault"

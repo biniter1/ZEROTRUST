@@ -1,0 +1,133 @@
+# ============================================================
+# FALCO — Runtime Security Detection
+#
+# Falco là gì?
+#   "Camera an ninh" cho K8s cluster
+#   Monitor mọi system call trong container (qua eBPF)
+#   Khi phát hiện hành vi bất thường → alert ngay
+#
+# Khác với Kyverno (prevent):
+#   Kyverno = chặn trước khi chạy
+#   Falco   = detect sau khi đang chạy
+#
+# Cài Falco:
+#   helm repo add falcosecurity https://falcosecurity.github.io/charts
+#   helm install falco falcosecurity/falco \
+#     --namespace falco --create-namespace \
+#     --set driver.kind=ebpf \
+#     --set falcosidekick.enabled=true \
+#     --set falcosidekick.config.slack.webhookurl=<URL>
+#
+# Chuẩn: NIST 800-207 T5 · NSA K8s §7
+# ============================================================
+
+# Custom rules cho Online Boutique
+# Rules này bổ sung vào default rules của Falco
+
+customRules:
+  online-boutique-rules.yaml: |-
+
+    # ── RULE 1: Shell spawned in container ───────────────────
+    # Không container nào trong Online Boutique cần shell
+    # Nếu ai đó spawn shell → đang investigate hoặc đã bị compromise
+    - rule: Shell spawned in container
+      desc: >
+        Detect shell execution inside a container.
+        No Online Boutique service should need a shell.
+      condition: >
+        spawned_process
+        and container
+        and container.name != ""
+        and proc.name in (shell_binaries)
+        and not proc.pname in (shell_binaries)
+      output: >
+        Shell spawned in container
+        (user=%user.name container=%container.name
+        image=%container.image.repository
+        shell=%proc.name parent=%proc.pname
+        cmdline=%proc.cmdline)
+      priority: WARNING
+      tags: [container, shell, zerotrust]
+
+    # ── RULE 2: Sensitive file read ───────────────────────────
+    # Không container nào cần đọc /etc/shadow, /etc/passwd, etc.
+    # Nếu đọc → dấu hiệu privilege escalation hoặc credential theft
+    - rule: Sensitive file read in container
+      desc: Detect reading of sensitive files inside containers.
+      condition: >
+        open_read
+        and container
+        and fd.name in (
+          /etc/shadow, /etc/passwd, /etc/sudoers,
+          /root/.ssh/authorized_keys,
+          /proc/1/environ
+        )
+      output: >
+        Sensitive file read in container
+        (user=%user.name file=%fd.name
+        container=%container.name
+        image=%container.image.repository)
+      priority: ERROR
+      tags: [container, filesystem, zerotrust]
+
+    # ── RULE 3: Unexpected outbound connection ────────────────
+    # Payment service chỉ được nhận request, không tự gọi ra ngoài
+    # Nếu paymentservice tự connect ra internet → red flag
+    - rule: Unexpected outbound connection from payment service
+      desc: >
+        paymentservice should not initiate outbound connections.
+        Detect potential data exfiltration.
+      condition: >
+        outbound
+        and container.name = "paymentservice"
+        and not fd.sip.name in (
+          "productcatalogservice",
+          "kube-dns.kube-system.svc.cluster.local"
+        )
+      output: >
+        Unexpected outbound connection from paymentservice
+        (container=%container.name
+        destination=%fd.sip:%fd.sport
+        image=%container.image.repository)
+      priority: CRITICAL
+      tags: [network, payment, zerotrust]
+
+    # ── RULE 4: Write to non-tmp directory ────────────────────
+    # readOnlyRootFilesystem: true — container không được ghi ngoài /tmp
+    # Nếu có write khác → Kyverno/PSS có thể đã bị bypass
+    - rule: Write to unexpected directory in container
+      desc: >
+        Container with readOnlyRootFilesystem should only write to /tmp.
+        Detect potential filesystem tampering.
+      condition: >
+        open_write
+        and container
+        and container.name in (
+          frontend, cartservice, checkoutservice,
+          paymentservice, productcatalogservice
+        )
+        and not fd.name startswith /tmp
+        and not fd.name startswith /dev
+        and not fd.name startswith /proc
+      output: >
+        Unexpected write in container
+        (user=%user.name file=%fd.name
+        container=%container.name
+        image=%container.image.repository)
+      priority: WARNING
+      tags: [container, filesystem, zerotrust]
+
+    # ── RULE 5: Privilege escalation attempt ─────────────────
+    - rule: Privilege escalation attempt
+      desc: Detect setuid/setgid execution in containers.
+      condition: >
+        spawned_process
+        and container
+        and proc.is_suid_exe = true
+      output: >
+        Privilege escalation attempt in container
+        (user=%user.name exe=%proc.exe
+        container=%container.name
+        image=%container.image.repository)
+      priority: CRITICAL
+      tags: [container, privilege, zerotrust]
