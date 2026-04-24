@@ -28,3 +28,8 @@ variable "eks_node_sg_id" {
   type        = string
   description = "Security Group ID for EKS nodes"
 }
+
+variable "kms_key_arn" {
+  type        = string
+  description = "KMS key ARN for EKS secret encryption"
+}

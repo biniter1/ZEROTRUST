@@ -2,7 +2,7 @@ resource "aws_cloudwatch_log_group" "eks" {
   name = "/aws/eks/${var.cluster_name}/cluster"
   retention_in_days = 90
 
-  kms_key_id = aws_kms_key.eks.arn
+  kms_key_id = var.eks_kms_key_arn
 
 }
 
@@ -40,5 +40,5 @@ resource "aws_cloudwatch_metric_alarm" "unauthorized_access" {
 # SNS Topic để gửi alert
 resource "aws_sns_topic" "security_alerts" {
   name              = "eks-security-alerts"
-  kms_master_key_id = aws_kms_key.cloudwatch.id
+  kms_master_key_id = var.cloudwatch_kms_key_id
 }

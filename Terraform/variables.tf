@@ -47,3 +47,31 @@ variable "private_subnets" {
   description = "CIDR blocks for private subnets"
   default     = ["172.16.1.0/24", "172.16.3.0/24"]
 }
+
+
+
+variable "approved_regions" {
+  type = string
+}
+variable "dev_account_id" {
+  type = string
+}
+variable "staging_account_id" {
+  type = string
+}
+variable "production_account_id" {
+  type = string
+}
+
+# ──────────────────────────────────────────
+# GitHub
+# ──────────────────────────────────────────
+variable "github_org" {
+  type        = string
+  description = "GitHub organization name (e.g. my-org)"
+}
+
+variable "github_repo" {
+  type        = string
+  description = "GitHub repository name (e.g. my-repo)"
+}
