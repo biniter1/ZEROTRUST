@@ -1,0 +1,84 @@
+# ============================================================
+# PSS RESTRICTED — Pod template mẫu tuân thủ đầy đủ
+#
+# Dùng làm tham chiếu khi viết Deployment mới.
+# Namespace production/staging enforce PSS restricted:
+#   pod-security.kubernetes.io/enforce: restricted
+#
+# Chuẩn: NSA K8s §3 · CIS EKS 5.2 · NIST 800-207 T4
+# ============================================================
+apiVersion: v1
+kind: Pod
+metadata:
+  name: example-compliant-pod
+  namespace: production
+  labels:
+    app: example
+spec:
+  # Không mount service account token mặc định
+  automountServiceAccountToken: false
+
+  # Security context cấp Pod
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    # seccompProfile: giới hạn syscall Linux (RuntimeDefault chặn ptrace, mount, ...)
+    seccompProfile:
+      type: RuntimeDefault
+
+  containers:
+    - name: app
+      image: <account>.dkr.ecr.ap-southeast-1.amazonaws.com/online-boutique/example@sha256:<digest>
+      # Luôn dùng digest — Kyverno enforce block tag :latest
+
+      ports:
+        - containerPort: 8080
+
+      # Security context cấp container
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        # Không thể ghi vào filesystem → không thể cài malware/backdoor
+        readOnlyRootFilesystem: true
+        # Ngăn process tự leo thang quyền (setuid, sudo)
+        allowPrivilegeEscalation: false
+        capabilities:
+          # Bỏ tất cả Linux capabilities mặc định
+          drop: ["ALL"]
+
+      # Resource limits bắt buộc — Kyverno reject pod không có limits
+      resources:
+        requests:
+          cpu: "100m"
+          memory: "64Mi"
+        limits:
+          cpu: "200m"
+          memory: "128Mi"
+
+      readinessProbe:
+        httpGet:
+          path: /healthz
+          port: 8080
+        initialDelaySeconds: 10
+        periodSeconds: 5
+      livenessProbe:
+        httpGet:
+          path: /healthz
+          port: 8080
+        initialDelaySeconds: 15
+        periodSeconds: 10
+
+      # readOnlyRootFilesystem=true → cần emptyDir riêng cho /tmp
+      volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+
+  volumes:
+    - name: tmp
+      emptyDir: {}
+
+  # PSS restricted tự động chặn (không cần khai báo tường minh):
+  #   hostNetwork, hostPID, hostIPC  → false
+  #   hostPath volumes               → bị từ chối
+  #   privileged containers          → bị từ chối

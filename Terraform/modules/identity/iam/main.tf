@@ -48,7 +48,6 @@ resource "aws_iam_role_policy_attachment" "registry_policy" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
 }
 
-# Thêm vào modules/iam/main.tf
 
 # OIDC Provider để GitHub Actions xác thực với AWS
 resource "aws_iam_openid_connect_provider" "github" {

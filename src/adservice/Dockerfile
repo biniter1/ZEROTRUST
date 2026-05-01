@@ -36,6 +36,6 @@ FROM eclipse-temurin:25.0.1_8-jre-alpine@sha256:9c65fe190cb22ba92f50b8d29a749d0f
 
 WORKDIR /app
 COPY --from=builder /app .
-
+USER 1000
 EXPOSE 9555
 ENTRYPOINT ["/app/build/install/hipstershop/bin/AdService"]

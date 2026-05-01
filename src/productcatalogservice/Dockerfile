@@ -38,4 +38,6 @@ COPY products.json .
 ENV GOTRACEBACK=single
 
 EXPOSE 3550
+
+USER 1000
 ENTRYPOINT ["/src/server"]

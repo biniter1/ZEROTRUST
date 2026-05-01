@@ -1,8 +1,9 @@
 resource "aws_eks_cluster" "cluster" {
+  # Các thông tin cơ bản của cluster
   name     = "${var.name_project}-cluster"
   role_arn = var.eks_cluster_role_arn
   version  = var.kubernetes_version
-
+  # Cấu hình VPC cho cluster
   vpc_config {
     subnet_ids              = var.private_subnets
     security_group_ids      = [var.eks_node_sg_id]
@@ -10,8 +11,10 @@ resource "aws_eks_cluster" "cluster" {
     endpoint_public_access  = false
   }
 
-  # Enable control plane logging
+  # Bật 6 loại log trong cluster
   enabled_cluster_log_types = ["api", "audit", "authenticator", "controllerManager", "scheduler"]
+
+  # Cơ chế encrypt đối log với key lấy từ KMS
   encryption_config {
     provider {
       key_arn = var.kms_key_arn

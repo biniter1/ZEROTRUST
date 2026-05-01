@@ -1,18 +1,79 @@
-# Ignore the large provider binaries and modules
+# ─── Secrets & credentials ───────────────────────────────
+.env
+*.env
+.env.*
+.env.local
+.env.development
+.env.staging
+.env.production
+secrets/
+credentials
+*.credentials
+.aws/credentials
+aws_credentials
+
+# ─── Private keys & certificates ─────────────────────────
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+*.cer
+*.crt
+
+# ─── Kubernetes sensitive ─────────────────────────────────
+*-secret.yaml
+*-secrets.yaml
+kubeconfig
+*.kubeconfig
+
+# ─── Terraform ────────────────────────────────────────────
 **/.terraform/
-
-# Ignore the lock file (Optional: some prefer to keep this to pin versions, 
-# but in many dev workflows it is excluded to avoid merge conflicts)
-.terraform.lock.hcl
-
-# IMPORTANT: Ignore state files (these contain secrets/credentials in plain text)
 *.tfstate
 *.tfstate.backup
-
-# Ignore variables that might contain secrets
 *.tfvars
-*.tfvars.json
+!*.tfvars.example
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
 
-# Ignore local environment overrides
-.terraformrc
-terraform.rc
+# ─── Node.js ──────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ─── Python ───────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+venv/
+.venv/
+
+# ─── Go ───────────────────────────────────────────────────
+vendor/
+
+# ─── Java ─────────────────────────────────────────────────
+target/
+*.class
+*.jar
+
+# ─── IDE ──────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# ─── Build outputs ────────────────────────────────────────
+dist/
+bin/
+out/
