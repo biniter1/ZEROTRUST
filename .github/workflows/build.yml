@@ -169,7 +169,7 @@ jobs:
 
       # ── Trivy image scan — TRƯỚC khi push ────
       - name: Trivy image scan (report)
-        uses: aquasecurity/trivy-action@v0.29.0
+        uses: aquasecurity/trivy-action@v0.28.0
         with:
           image-ref: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO_PREFIX }}/${{ matrix.service }}:${{ github.sha }}
           format: sarif
@@ -186,7 +186,7 @@ jobs:
           category: trivy-${{ matrix.service }}
 
       - name: Trivy image scan (enforce — CRITICAL)
-        uses: aquasecurity/trivy-action@v0.29.0
+        uses: aquasecurity/trivy-action@v0.28.0
         with:
           image-ref: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO_PREFIX }}/${{ matrix.service }}:${{ github.sha }}
           severity: CRITICAL
