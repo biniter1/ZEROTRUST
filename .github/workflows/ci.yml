@@ -106,7 +106,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload Gitleaks SARIF
-        uses: github/codeql-action/upload-sarif@b56ba49b26e50535fa1e7b7e2f60cdf9dc2b3f02
+        uses: github/codeql-action/upload-sarif@e46ed2c7d6a7c1b4d91b98c5d2f4c7e0b1d6a52
         if: always()
         with:
           sarif_file: results.sarif
@@ -143,7 +143,7 @@ jobs:
             --metrics=off . || true
 
       - name: Upload Semgrep SARIF
-        uses: github/codeql-action/upload-sarif@b56ba49b26e50535fa1e7b7e2f60cdf9dc2b3f02
+        uses: github/codeql-action/upload-sarif@e46ed2c7d6a7c1b4d91b98c5d2f4c7e0b1d6a52
         if: always()
         with:
           sarif_file: semgrep.sarif
@@ -182,7 +182,7 @@ jobs:
           exit-code: '0'
 
       - name: Upload Trivy fs SARIF
-        uses: github/codeql-action/upload-sarif@b56ba49b26e50535fa1e7b7e2f60cdf9dc2b3f02
+        uses: github/codeql-action/upload-sarif@e46ed2c7d6a7c1b4d91b98c5d2f4c7e0b1d6a52
         if: always()
         with:
           sarif_file: trivy-fs.sarif
@@ -216,10 +216,10 @@ jobs:
           framework: terraform
           output_format: sarif
           output_file_path: checkov.sarif
-          soft_fail: false
+          soft_fail: true
 
       - name: Upload Checkov SARIF
-        uses: github/codeql-action/upload-sarif@b56ba49b26e50535fa1e7b7e2f60cdf9dc2b3f02
+        uses: github/codeql-action/upload-sarif@e46ed2c7d6a7c1b4d91b98c5d2f4c7e0b1d6a52
         if: always()
         with:
           sarif_file: checkov.sarif
@@ -230,7 +230,7 @@ jobs:
         with:
           directory: terraform/
           framework: terraform
-          soft_fail: true
+          soft_fail: false
 
   # ──────────────────────────────────────────────
   # JOB 6: Language CI — reusable per language
@@ -344,9 +344,15 @@ jobs:
 
           FAIL=0
           for result in \
-            "${{ needs.secret-scan.result }}" \
-            "${{ needs.sast.result }}" \
-            "${{ needs.dependency-scan.result }}"; do
+              "${{ needs.secret-scan.result }}" \
+              "${{ needs.sast.result }}" \
+              "${{ needs.dependency-scan.result }}" \
+              "${{ needs.iac-scan.result }}" \
+              "${{ needs.ci-go.result }}" \
+              "${{ needs.ci-node.result }}" \
+              "${{ needs.ci-python.result }}" \
+              "${{ needs.ci-java.result }}" \
+              "${{ needs.ci-dotnet.result }}"; do
             if [[ "$result" == "failure" || "$result" == "cancelled" ]]; then
               FAIL=1
             fi

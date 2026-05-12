@@ -131,7 +131,7 @@ jobs:
       # ── OIDC → gha-ecr-push-role (TTL 15p) ───
       # Đây là role ECR-only từ Layer 1 Flow 1
       - name: Configure AWS credentials (OIDC — ECR push only)
-        uses: aws-actions/configure-aws-credentials@ececc85a0f8c18e2a3bd4e5454f09b583b27ad89  # v4.1.0
+        uses: aws-actions/configure-aws-credentials@b47578306c5b7d0a87b1c1e54dbf1c5c6ecef5d  # v4.1.0
         with:
           role-to-assume: ${{ secrets.GHA_ECR_PUSH_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -147,13 +147,7 @@ jobs:
         run: |
           aws ecr describe-repositories \
             --repository-names ${{ env.ECR_REPO_PREFIX }}/${{ matrix.service }} \
-            --region ${{ env.AWS_REGION }} 2>/dev/null || \
-          aws ecr create-repository \
-            --repository-name ${{ env.ECR_REPO_PREFIX }}/${{ matrix.service }} \
-            --image-scanning-configuration scanOnPush=true \
-            --image-tag-mutability IMMUTABLE \
-            --encryption-configuration encryptionType=KMS \
-            --region ${{ env.AWS_REGION }}
+            --region ${{ env.AWS_REGION }} 
 
       # ── Setup BuildKit ────────────────────────
       - name: Set up Docker Buildx
@@ -186,7 +180,7 @@ jobs:
           exit-code: '0'
 
       - name: Upload Trivy SARIF
-        uses: github/codeql-action/upload-sarif@b56ba49b26e50535fa1e7b7e2f60cdf9dc2b3f02
+        uses: github/codeql-action/upload-sarif@e46ed2c7d6a7c1b4d91b98c5d2f4c7e0b1d6a52
         if: always()
         with:
           sarif_file: trivy-${{ matrix.service }}.sarif

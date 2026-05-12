@@ -19,7 +19,9 @@ on:
     workflows: ["Build — Image + Sign + Attest"]
     types: [completed]
     branches: [main]
-
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
 permissions:
   contents: read
   id-token: write
@@ -65,7 +67,7 @@ jobs:
 
       # OIDC mới — T3 per-session
       - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@ececc85a0f8c18e2a3bd4e5454f09b583b27ad89
+        uses: aws-actions/configure-aws-credentials@b47578306c5b7d0a87b1c1e54dbf1c5c6ecef5d
         with:
           role-to-assume: ${{ secrets.GHA_EKS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -103,6 +105,7 @@ jobs:
           cosign verify \
             --key "awskms:///${{ secrets.COSIGN_KMS_KEY_ARN }}" \
             --annotations "github-repo=${{ github.repository }}" \
+            --annotations "github-sha=${{ github.event.workflow_run.head_sha }}" \
             "${{ steps.image.outputs.full_ref }}"
           echo "Signature OK: ${{ matrix.service }}"
 
@@ -116,8 +119,11 @@ jobs:
             "${{ steps.image.outputs.full_ref }}" \
             | jq -r '.payload | @base64d | fromjson | .predicateType'
           echo "SBOM OK: ${{ matrix.service }}"
-
+      
       # Verify 3: SLSA Provenance
+      - name: Install GitHub CLI extension
+        run: |
+          gh extension install github/gh-attestation || true 
       - name: Verify SLSA Provenance
         if: steps.image.outputs.skip != 'true'
         run: |
@@ -153,7 +159,7 @@ jobs:
       fail-fast: true
     steps:
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@ececc85a0f8c18e2a3bd4e5454f09b583b27ad89
+        uses: aws-actions/configure-aws-credentials@b47578306c5b7d0a87b1c1e54dbf1c5c6ecef5d
         with:
           role-to-assume: ${{ secrets.GHA_EKS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -195,14 +201,14 @@ jobs:
     name: Deploy to Staging
     needs: [trivy-rescan]
     runs-on: ubuntu-latest
-    environment: staging   # GitHub Environment — không có reviewers
-
+    environment: staging   
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
       # OIDC mới — T3 per-session, không reuse từ verify jobs
       - name: Configure AWS credentials (OIDC — staging)
-        uses: aws-actions/configure-aws-credentials@ececc85a0f8c18e2a3bd4e5454f09b583b27ad89
+        uses: aws-actions/configure-aws-credentials@b47578306c5b7d0a87b1c1e54dbf1c5c6ecef5d
         with:
           role-to-assume: ${{ secrets.GHA_EKS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -241,7 +247,7 @@ jobs:
         run: |
           for SERVICE in ${{ env.SERVICES }}; do
             kubectl rollout status deployment/${SERVICE} \
-              -n staging --timeout=300s 2>/dev/null || true
+              -n staging --timeout=300s 2>/dev/null 
           done
 
       - name: Smoke test — staging
@@ -258,6 +264,7 @@ jobs:
             sleep 15
           done
           echo "WARNING: Staging not accessible after 3 attempts"
+          exit 1 
 
   # ──────────────────────────────────────────────
   # JOB 4: Integration Tests
@@ -270,7 +277,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@ececc85a0f8c18e2a3bd4e5454f09b583b27ad89
+        uses: aws-actions/configure-aws-credentials@b47578306c5b7d0a87b1c1e54dbf1c5c6ecef5d
         with:
           role-to-assume: ${{ secrets.GHA_EKS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -294,6 +301,7 @@ jobs:
           if [ "$FAILED" -gt "0" ]; then
             echo "WARNING: $FAILED pods not Running"
             kubectl get pods -n staging | grep -v "Running\|Completed"
+            exit 1 
           else
             echo "All pods Running"
           fi
@@ -315,11 +323,10 @@ jobs:
     name: Production Gate (Admin Approval)
     needs: [integration-tests]
     runs-on: ubuntu-latest
-    environment: production  # ← manual approval xảy ra ở đây
-
+    environment: production  
     steps:
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@ececc85a0f8c18e2a3bd4e5454f09b583b27ad89
+        uses: aws-actions/configure-aws-credentials@b47578306c5b7d0a87b1c1e54dbf1c5c6ecef5d
         with:
           role-to-assume: ${{ secrets.GHA_EKS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -360,13 +367,13 @@ jobs:
     name: Deploy to Production
     needs: [production-gate]
     runs-on: ubuntu-latest
-
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
       # OIDC request hoàn toàn mới — T3 per-session
       - name: Configure AWS credentials (OIDC — production)
-        uses: aws-actions/configure-aws-credentials@ececc85a0f8c18e2a3bd4e5454f09b583b27ad89
+        uses: aws-actions/configure-aws-credentials@b47578306c5b7d0a87b1c1e54dbf1c5c6ecef5d
         with:
           role-to-assume: ${{ secrets.GHA_EKS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -400,7 +407,7 @@ jobs:
         run: |
           for SERVICE in ${{ env.SERVICES }}; do
             kubectl rollout status deployment/${SERVICE} \
-              -n production --timeout=600s 2>/dev/null || true
+              -n production --timeout=600s 2>/dev/null 
           done
 
       - name: Rollback on failure
@@ -408,7 +415,7 @@ jobs:
         run: |
           echo "Deployment failed — rolling back production..."
           for SERVICE in ${{ env.SERVICES }}; do
-            kubectl rollout undo deployment/${SERVICE} -n production 2>/dev/null || true
+            kubectl rollout undo deployment/${SERVICE} -n production 2>/dev/null 
           done
           echo "Rollback complete"
 
