@@ -32,7 +32,7 @@ resource "aws_iam_role" "gha_eks_access" {
       }
     ]
   })
-  max_session_duration = 1200
+  max_session_duration = 3600
   tags = {
     Purpose = "GitHub Actions Access to EKS cluster"
   }

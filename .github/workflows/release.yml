@@ -1,14 +1,5 @@
 # ============================================================
 # RELEASE WORKFLOW — chạy khi push tag semver (v1.2.3)
-#
-# Thay đổi so với bản cũ:
-#   - ap-southeast-2 → ap-southeast-1 (đúng với Layer 1)
-#   - self-hosted → ubuntu-latest (ephemeral)
-#   - @v4, @v2 → pin bằng SHA
-#   - AWS_DEPLOY_ROLE_ARN → GHA_ECR_PUSH_ROLE_ARN (role đúng)
-#   - Tag bằng semver + verify signature sau khi retag
-#   - Không dùng docker pull/tag (không có docker daemon trên ubuntu-latest)
-#     → dùng crane để copy image giữa tags trong ECR
 # ============================================================
 
 name: Release — Tag Semver

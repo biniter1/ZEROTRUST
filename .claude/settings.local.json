@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Get-ChildItem -Path \"D:\\\\DACN\\\\Zero_trust\" -Recurse -Directory | Select-Object FullName | ForEach-Object { $_.FullName } | Sort-Object)",
+      "PowerShell(Get-ChildItem -Path \"D:\\\\DACN\\\\Zero_trust\" -Recurse -File | Where-Object { $_.FullName -notmatch \"\\\\.terraform|node_modules|\\\\.git|build|dist|\\\\.class\" } | Select-Object FullName | Sort-Object | ForEach-Object { $_.FullName })"
+    ]
+  }
+}

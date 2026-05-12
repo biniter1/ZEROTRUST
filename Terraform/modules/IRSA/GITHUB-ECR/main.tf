@@ -46,7 +46,7 @@ resource "aws_iam_role" "gha_ecr_push" {
       }
     ]
   })
-  max_session_duration = 900
+  max_session_duration = 3600
   tags = {
     Purpose = "GitHub Actions ECR push"
   }

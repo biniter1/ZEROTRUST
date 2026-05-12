@@ -33,7 +33,7 @@ jobs:
   # ──────────────────────────────────────────────
   changes:
     name: Detect Changed Services
-    runs-on: ubuntu-latest    # ephemeral — SLSA L3
+    runs-on: ubuntu-latest    
     outputs:
       frontend:              ${{ steps.filter.outputs.frontend }}
       cartservice:           ${{ steps.filter.outputs.cartservice }}
@@ -111,7 +111,7 @@ jobs:
         with:
           sarif_file: results.sarif
           category: gitleaks
-        continue-on-error: true  # SARIF có thể không tồn tại nếu không có finding
+        continue-on-error: true  
 
       # Enforce step — fail nếu có secret
       - name: Gitleaks scan (enforce)
@@ -216,7 +216,7 @@ jobs:
           framework: terraform
           output_format: sarif
           output_file_path: checkov.sarif
-          soft_fail: true
+          soft_fail: false
 
       - name: Upload Checkov SARIF
         uses: github/codeql-action/upload-sarif@b56ba49b26e50535fa1e7b7e2f60cdf9dc2b3f02
@@ -224,6 +224,13 @@ jobs:
         with:
           sarif_file: checkov.sarif
           category: checkov
+      
+      - name: Checkov scan (enforce)
+        uses: bridgecrewio/checkov-action@f88bf0cd4c2b9f23da70b81b9d0b3ec9cf975429
+        with:
+          directory: terraform/
+          framework: terraform
+          soft_fail: true
 
   # ──────────────────────────────────────────────
   # JOB 6: Language CI — reusable per language
@@ -335,8 +342,6 @@ jobs:
           echo "ci-java:          ${{ needs.ci-java.result }}"
           echo "ci-dotnet:        ${{ needs.ci-dotnet.result }}"
 
-          # Các job có thể skipped (nếu không có service thay đổi) — đó là OK
-          # Chỉ fail nếu kết quả là 'failure' hoặc 'cancelled'
           FAIL=0
           for result in \
             "${{ needs.secret-scan.result }}" \
@@ -353,53 +358,3 @@ jobs:
           fi
           echo "All applicable checks passed."
 
-  # ──────────────────────────────────────────────
-  # JOB 8: PR Comment 
-  # ──────────────────────────────────────────────
-  pr-comment:
-    name: PR Status Comment
-    needs:
-      - secret-scan
-      - sast
-      - dependency-scan
-      - ci-gate
-    runs-on: ubuntu-latest
-    if: always()
-    permissions:
-      pull-requests: write
-    steps:
-      - uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
-        with:
-          script: |
-            const r = (v) => v === 'success' ? '✅' : v === 'skipped' ? '⏭️' : '❌';
-            const overall = '${{ needs.ci-gate.result }}' === 'success' ? '✅ PASSED' : '❌ FAILED';
-
-            const body = `## ${overall} — Zero-Trust CI Gate
-
-            | Check | Status | Standard |
-            |-------|--------|----------|
-            | Secret Scan (Gitleaks) | ${r('${{ needs.secret-scan.result }}')} | CIS GitHub §2.3 |
-            | SAST (Semgrep) | ${r('${{ needs.sast.result }}')} | NIST 800-204 §3.2 |
-            | Dependency Scan (Trivy) | ${r('${{ needs.dependency-scan.result }}')} | NIST 800-190 §4.2 |
-
-            > Docker build và signing **không chạy trên PR** — chỉ chạy khi merge vào \`main\`
-
-            **Run:** ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-            });
-            const bot = comments.find(c => c.user.type === 'Bot' && c.body.includes('Zero-Trust CI Gate'));
-            if (bot) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner, repo: context.repo.repo,
-                comment_id: bot.id, body
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner, repo: context.repo.repo,
-                issue_number: context.issue.number, body
-              });
-            }

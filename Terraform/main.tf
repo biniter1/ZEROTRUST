@@ -6,12 +6,6 @@ terraform {
     }
   }
 
-  backend "s3" {
-    bucket         = "company-terraform-state-demo-project"
-    key            = "prod/terraform.tfstate"
-    region         = "ap-southeast-2"
-    dynamodb_table = "terraform-lock-demo-project"
-  }
 }
 
 provider "aws" {
@@ -95,7 +89,7 @@ module "cloudwatch" {
   source = "./modules/cloudwacth"
 
   cluster_name          = module.eks_cluster.cluster_name
-  eks_kms_key_arn       = module.kms.eks_key_arn
+  eks_kms_key_arn       = module.kms.cloudwatch_key_arn
   cloudwatch_kms_key_id = module.kms.cloudwatch_key_id
 
   depends_on = [module.eks_cluster, module.kms]

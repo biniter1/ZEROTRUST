@@ -1,14 +1,5 @@
 # ============================================================
 # BUILD WORKFLOW — chạy khi merge vào main
-# Nâng cấp Zero Trust:
-#   + GitHub-hosted runner (ephemeral) — SLSA L3
-#   + SHA-pinned Actions
-#   + Trivy enforce (không comment out)
-#   + cosign sign với AWS KMS
-#   + Syft SBOM attest
-#   + SLSA Provenance (actions/attest-build-provenance)
-#   + Push bằng digest, không tag mutable
-#   + 2 OIDC role riêng: ECR push vs EKS deploy
 #
 # Chuẩn: SLSA L3 · NIST 800-190 · NIST 800-207 T6
 # ============================================================
@@ -26,7 +17,7 @@ permissions:
   security-events: write # upload SARIF
 
 env:
-  AWS_REGION: ap-southeast-1   # đúng với Layer 1 (không phải ap-southeast-2)
+  AWS_REGION: ap-southeast-1   
   ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.ap-southeast-1.amazonaws.com
   ECR_REPO_PREFIX: online-boutique
 
@@ -151,7 +142,7 @@ jobs:
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@062b18b96a7aff071d4dc91bc00c4c1a7945b076  # v2.0.1
 
-      # Tạo ECR repo nếu chưa tồn tại — kế thừa từ pipeline cũ
+      # Tạo ECR repo nếu chưa tồn tại 
       - name: Ensure ECR repository exists
         run: |
           aws ecr describe-repositories \
@@ -168,7 +159,7 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f95db51fddba0c2d1ec667646a06c2ce06100226  # v3.0.0
 
-      # ── Build image (chưa push) ───────────────
+      # ── Build image chưa push ───────────────
       - name: Build Docker image
         id: build
         uses: docker/build-push-action@4a13e500e55cf31b7a5d59a38ab2040ab0f42f56  # v5.1.0
@@ -257,8 +248,6 @@ jobs:
             "$IMAGE"
 
       # ── SLSA Provenance Attestation ───────────
-      # Hoàn toàn mới — không có trong pipeline cũ
-      # GitHub native action — đạt SLSA L3
       - name: Generate SLSA Provenance
         uses: actions/attest-build-provenance@c074443f1aee8d4aeeae555aebba3282517141b2  # v2.2.3
         with:

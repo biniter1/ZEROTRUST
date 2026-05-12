@@ -156,7 +156,7 @@ resource "aws_identitystore_group_membership" "admin_01" {
 }
 resource "aws_identitystore_group_membership" "soc_01" {
   identity_store_id = local.sso_identity_store_id
-  group_id          = aws_identitystore_group.soc.group_id
+  group_id          = aws_identitystore_group.log.group_id
   member_id         = aws_identitystore_user.soc_01.user_id
 }
 resource "aws_identitystore_group_membership" "audit_01" {
@@ -566,7 +566,7 @@ resource "aws_ssoadmin_account_assignment" "soc_all" {
   }
   instance_arn       = local.sso_instance_arn
   permission_set_arn = aws_ssoadmin_permission_set.soc.arn
-  principal_id       = aws_identitystore_group.soc.group_id
+  principal_id       = aws_identitystore_group.log.group_id
   principal_type     = "GROUP"
   target_id          = each.value
   target_type        = "AWS_ACCOUNT"
@@ -814,7 +814,7 @@ resource "aws_ssoadmin_account_assignment" "infrastructure_all" {
   }
   instance_arn       = local.sso_instance_arn
   permission_set_arn = aws_ssoadmin_permission_set.infrastructure.arn
-  principal_id       = aws_identitystore_group.infrastructure.group_id
+  principal_id       = aws_identitystore_group.infra.group_id
   principal_type     = "GROUP"
   target_id          = each.value
   target_type        = "AWS_ACCOUNT"
