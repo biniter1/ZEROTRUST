@@ -29,7 +29,7 @@ env:
   AWS_REGION: ap-southeast-1
   ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.ap-southeast-1.amazonaws.com
   ECR_REPO_PREFIX: online-boutique
-  EKS_CLUSTER_NAME: online-boutique-prod
+  EKS_CLUSTER_NAME: devsecops-cluster
   SERVICES: >-
     frontend cartservice productcatalogservice currencyservice
     paymentservice shippingservice emailservice checkoutservice

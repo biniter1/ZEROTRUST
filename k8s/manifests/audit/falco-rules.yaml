@@ -31,14 +31,18 @@ customRules:
       priority: ERROR
       tags: [container, filesystem, zerotrust]
 
-    - rule: Privilege escalation attempt
-      desc: Detect setuid/setgid execution in containers
+    - rule: Write to unexpected directory in container
+      desc: Container should only write to /tmp
       condition: >
-        spawned_process and container
-        and proc.is_suid_exe = true
+        open_write and container
+        and container.name in (frontend, cartservice, checkoutservice,
+        paymentservice, productcatalogservice)
+        and not fd.name startswith /tmp
+        and not fd.name startswith /dev
+        and not fd.name startswith /proc
       output: >
-        Privilege escalation attempt in container (user=%user.name
-        exe=%proc.exe container=%container.name
+        Unexpected write in container (user=%user.name
+        file=%fd.name container=%container.name
         image=%container.image.repository)
-      priority: CRITICAL
-      tags: [container, privilege, zerotrust]
+      priority: WARNING
+      tags: [container, filesystem, zerotrust]
