@@ -63,11 +63,11 @@ jobs:
       fail-fast: true  # nếu 1 service fail verify → dừng tất cả
 
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@v4
 
       # OIDC mới — T3 per-session
       - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.GHA_EKS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -75,7 +75,7 @@ jobs:
           role-session-name: verify-${{ matrix.service }}-${{ github.run_id }}
 
       - name: Install Cosign
-        uses: sigstore/cosign-installer@d7d6bc7722e3daa8354c50bcb52f4837da5e9b6a
+        uses: sigstore/cosign-installer@v3
 
       - name: Get image digest from ECR
         id: image
@@ -159,7 +159,7 @@ jobs:
       fail-fast: true
     steps:
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.GHA_EKS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -167,7 +167,7 @@ jobs:
           role-session-name: trivy-${{ matrix.service }}-${{ github.run_id }}
 
       - name: ECR Login
-        uses: aws-actions/amazon-ecr-login@062b18b96a7aff071d4dc91bc00c4c1a7945b076
+        uses: aws-actions/amazon-ecr-login@v2
 
       - name: Get image digest
         id: image
@@ -186,7 +186,7 @@ jobs:
 
       - name: Trivy rescan (fresh CVE DB)
         if: steps.image.outputs.skip != 'true'
-        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0
+        uses: aquasecurity/trivy-action@v0.29.0
         with:
           image-ref: ${{ steps.image.outputs.full_ref }}
           severity: CRITICAL
@@ -204,11 +204,11 @@ jobs:
     environment: staging   
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@v4
 
       # OIDC mới — T3 per-session, không reuse từ verify jobs
       - name: Configure AWS credentials (OIDC — staging)
-        uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.GHA_EKS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -274,10 +274,10 @@ jobs:
     needs: [deploy-staging]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@v4
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.GHA_EKS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -326,7 +326,7 @@ jobs:
     environment: production  
     steps:
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.GHA_EKS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -334,7 +334,7 @@ jobs:
           role-session-name: gate-verify-${{ github.run_id }}
 
       - name: Install Cosign
-        uses: sigstore/cosign-installer@d7d6bc7722e3daa8354c50bcb52f4837da5e9b6a
+        uses: sigstore/cosign-installer@v3
 
       # Final verify tại thời điểm approve — T3 per-session
       - name: Final verification before production
@@ -369,11 +369,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@v4
 
       # OIDC request hoàn toàn mới — T3 per-session
       - name: Configure AWS credentials (OIDC — production)
-        uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.GHA_EKS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}

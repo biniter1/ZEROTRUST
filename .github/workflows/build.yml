@@ -44,9 +44,9 @@ jobs:
       has_changes:           ${{ steps.build-matrix.outputs.has_changes }}
 
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@v4
 
-      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36  # v3.0.2
+      - uses: dorny/paths-filter@v3  # v3.0.2
         id: filter
         with:
           filters: |
@@ -126,11 +126,11 @@ jobs:
       attestations: write
       security-events: write
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@v4
 
       # ── OIDC → gha-ecr-push-role (TTL 15p) ───
       - name: Configure AWS credentials (OIDC — ECR push only)
-        uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7  # v6.0.0
+        uses: aws-actions/configure-aws-credentials@v4  # v6.0.0
         with:
           role-to-assume: ${{ secrets.GHA_ECR_PUSH_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -139,7 +139,7 @@ jobs:
 
       - name: Login to Amazon ECR
         id: ecr-login
-        uses: aws-actions/amazon-ecr-login@062b18b96a7aff071d4dc91bc00c4c1a7945b076  # v2.0.1
+        uses: aws-actions/amazon-ecr-login@v2  # v2.0.1
 
       # Tạo ECR repo nếu chưa tồn tại 
       - name: Ensure ECR repository exists
@@ -150,12 +150,12 @@ jobs:
 
       # ── Setup BuildKit ────────────────────────
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@f95db51fddba0c2d1ec667646a06c2ce06100226  # v3.0.0
+        uses: docker/setup-buildx-action@v3  # v3.0.0
 
       # ── Build image chưa push ───────────────
       - name: Build Docker image
         id: build
-        uses: docker/build-push-action@4a13e500e55cf31b7a5d59a38ab2040ab0f42f56  # v5.1.0
+        uses: docker/build-push-action@v6  # v5.1.0
         with:
           context: ${{ matrix.context }}
           push: false
@@ -169,7 +169,7 @@ jobs:
 
       # ── Trivy image scan — TRƯỚC khi push ────
       - name: Trivy image scan (report)
-        uses: aquasecurity/trivy-action@8bd2f9fbda21095123535f6201e5050b7315e21a
+        uses: aquasecurity/trivy-action@v0.29.0
         with:
           image-ref: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO_PREFIX }}/${{ matrix.service }}:${{ github.sha }}
           format: sarif
@@ -179,14 +179,14 @@ jobs:
           exit-code: '0'
 
       - name: Upload Trivy SARIF
-        uses: github/codeql-action/upload-sarif@fca7ace96b7d713c7035871441bd52efbe39e27e  # v3.28.19
+        uses: github/codeql-action/upload-sarif@v3 # v3.28.19
         if: always()
         with:
           sarif_file: trivy-${{ matrix.service }}.sarif
           category: trivy-${{ matrix.service }}
 
       - name: Trivy image scan (enforce — CRITICAL)
-        uses: aquasecurity/trivy-action@8bd2f9fbda21095123535f6201e5050b7315e21a
+        uses: aquasecurity/trivy-action@v0.29.0
         with:
           image-ref: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO_PREFIX }}/${{ matrix.service }}:${{ github.sha }}
           severity: CRITICAL
@@ -196,7 +196,7 @@ jobs:
       # ── Push image (sau khi scan sạch) ───────
       - name: Push image to ECR
         id: push
-        uses: docker/build-push-action@4a13e500e55cf31b7a5d59a38ab2040ab0f42f56
+        uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
           push: true
@@ -205,7 +205,7 @@ jobs:
 
       # ── Generate SBOM (Syft) ──────────────────
       - name: Install Syft
-        uses: anchore/sbom-action/download-syft@ab5d7b5f48981941c4c5d6bf33aeb98fe3bae38c
+        uses: anchore/sbom-action/download-syft@v0
 
       - name: Generate SBOM (CycloneDX)
         run: |
@@ -216,7 +216,7 @@ jobs:
 
       # ── Cosign sign (AWS KMS) ─────────────────
       - name: Install Cosign
-        uses: sigstore/cosign-installer@d7d6bc7722e3daa8354c50bcb52f4837da5e9b6a
+        uses: sigstore/cosign-installer@v3
 
       - name: Sign image with AWS KMS
         run: |
@@ -242,7 +242,7 @@ jobs:
 
       # ── SLSA Provenance Attestation ───────────
       - name: Generate SLSA Provenance
-        uses: actions/attest-build-provenance@c074443f1aee8d4aeeae555aebba3282517141b2  # v2.2.3
+        uses: actions/attest-build-provenance@v1  # v2.2.3
         with:
           subject-name: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO_PREFIX }}/${{ matrix.service }}
           subject-digest: ${{ steps.push.outputs.digest }}
