@@ -186,7 +186,7 @@ jobs:
 
       - name: Trivy rescan (fresh CVE DB)
         if: steps.image.outputs.skip != 'true'
-        uses: aquasecurity/trivy-action@v0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ steps.image.outputs.full_ref }}
           severity: CRITICAL
