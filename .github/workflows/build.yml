@@ -127,7 +127,13 @@ jobs:
       security-events: write
     steps:
       - uses: actions/checkout@v4
-
+      - name: Debug OIDC Token
+        run: |
+          echo "Repository: ${{ github.repository }}"
+          echo "Ref: ${{ github.ref }}"
+          echo "Workflow: ${{ github.workflow_ref }}"
+          echo "Actor: ${{ github.actor }}"
+          echo "Event: ${{ github.event_name }}"
       # ── OIDC → gha-ecr-push-role (TTL 15p) ───
       - name: Configure AWS credentials (OIDC — ECR push only)
         uses: aws-actions/configure-aws-credentials@v4  # v6.0.0
