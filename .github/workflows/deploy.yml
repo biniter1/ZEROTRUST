@@ -273,7 +273,7 @@ jobs:
               continue
             fi
             IMAGE="${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO_PREFIX }}/${SERVICE}@${DIGEST}"
-            kubectl set image deployment/${SERVICE} ${SERVICE}=${IMAGE} -n staging
+            kubectl set image deployment/${SERVICE} server=${IMAGE} -n staging
             echo "Updated ${SERVICE}@${DIGEST:0:19}..."
           done
 
@@ -431,7 +431,7 @@ jobs:
             [ "$DIGEST" == "SKIP" ] && continue
 
             IMAGE="${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO_PREFIX }}/${SERVICE}@${DIGEST}"
-            kubectl set image deployment/${SERVICE} ${SERVICE}=${IMAGE} -n production
+            kubectl set image deployment/${SERVICE} server=${IMAGE} -n production
             echo "Deployed: ${SERVICE}"
           done
 
