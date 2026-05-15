@@ -230,30 +230,37 @@ jobs:
       # Kế thừa ý tưởng Helm deploy từ pipeline cũ nhưng lên AWS EKS thật
       - name: Deploy to staging namespace
         run: |
-          SHA="${{ github.event.workflow_run.head_sha }}"
+          set -euo pipefail
 
-          # Bước 1: Helm install lần đầu nếu chưa có
-          helm upgrade --install online-boutique ./helm-chart \\
-            -f helm-chart/values-staging.yaml \\
-            -n staging \\
-            --wait --timeout=5m \\
-            --set global.image.registry="${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO_PREFIX }}" \\
-            || echo "Helm install skipped or already exists"
+          SHA="${{ github.sha }}"
 
-          # Bước 2: Update image digest cho từng service đã build
+          helm upgrade --install online-boutique ./helm-chart \
+            -f helm-chart/values-staging.yaml \
+            -n staging \
+            --create-namespace \
+            --wait \
+            --timeout=5m \
+            --set global.image.registry="${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO_PREFIX }}"
+
           for SERVICE in ${{ env.SERVICES }}; do
-            DIGEST=$(aws ecr describe-images \\
-              --repository-name ${{ env.ECR_REPO_PREFIX }}/${SERVICE} \\
-              --image-ids imageTag=${SHA} \\
-              --query 'imageDetails[0].imageDigest' \\
-              --output text 2>/dev/null || echo "SKIP")
-            if [ "$DIGEST" == "SKIP" ]; then
-              echo "Skipping ${SERVICE} — not rebuilt"
+            DIGEST=$(aws ecr describe-images \
+              --repository-name "${{ env.ECR_REPO_PREFIX }}/${SERVICE}" \
+              --image-ids imageTag="${SHA}" \
+              --query 'imageDetails[0].imageDigest' \
+              --output text 2>/dev/null || true)
+
+            if [ -z "$DIGEST" ] || [ "$DIGEST" = "None" ]; then
+              echo "Skipping ${SERVICE}"
               continue
             fi
+
             IMAGE="${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO_PREFIX }}/${SERVICE}@${DIGEST}"
-            kubectl set image deployment/${SERVICE} ${SERVICE}=${IMAGE} -n staging
-            echo "Deployed: ${SERVICE} → ${DIGEST:0:19}..."
+
+            kubectl set image deployment/${SERVICE} \
+              ${SERVICE}=${IMAGE} \
+              -n staging
+
+            echo "Deployed ${SERVICE}"
           done
 
       - name: Verify staging rollout
