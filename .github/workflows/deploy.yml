@@ -132,8 +132,7 @@ jobs:
         if: steps.image.outputs.skip != 'true'
         run: |
           gh attestation verify \
-            --owner ${{ github.repository_owner }} \
-            --repo ${{ github.event.repository.name }} \
+            --repo ${{ github.repository }} \
             "${{ steps.image.outputs.full_ref }}"
           echo "Provenance OK: ${{ matrix.service }}"
         env:
