@@ -162,3 +162,11 @@ module "organization" {
   staging_account_id    = var.staging_account_id
   production_account_id = var.production_account_id
 }
+
+# ──────────────────────────────────────────
+# Secrets Manager — tất cả secrets cho services
+# ──────────────────────────────────────────
+module "secrets" {
+  source     = "./modules/secrets"
+  aws_region = var.aws_region
+}
