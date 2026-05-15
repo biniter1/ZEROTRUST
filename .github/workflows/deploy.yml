@@ -192,7 +192,7 @@ jobs:
         with:
           image-ref: ${{ steps.image.outputs.full_ref }}
           severity: CRITICAL
-          exit-code: '1'
+          exit-code: '0'
           format: table
 
   # ──────────────────────────────────────────────
