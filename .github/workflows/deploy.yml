@@ -422,9 +422,31 @@ jobs:
 
       - name: Deploy to production namespace
         run: |
+          run: |
+          # Lấy digest frontend cho helm install
+          FRONTEND_DIGEST=$(aws ecr describe-images \
+            --repository-name "${{ env.ECR_REPO_PREFIX }}/frontend" \
+            --image-ids imageTag="latest-main" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text 2>/dev/null || echo "")
+
+          if [ -z "$FRONTEND_DIGEST" ] || [ "$FRONTEND_DIGEST" = "None" ]; then
+            echo "ERROR: frontend image not found"
+            exit 1
+          fi
+
+          # Helm install production
+          helm upgrade --install online-boutique ./helm-chart \
+            -f helm-chart/values-production.yaml \
+            -n production \
+            --create-namespace \
+            --set "images.repository=${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO_PREFIX }}" \
+            --set "images.tag=@${FRONTEND_DIGEST}"
+
+          # Update từng service với digest riêng
           for SERVICE in ${{ env.SERVICES }}; do
             DIGEST=$(aws ecr describe-images \
-              --repository-name ${{ env.ECR_REPO_PREFIX }}/${SERVICE} \
+              --repository-name "${{ env.ECR_REPO_PREFIX }}/${SERVICE}" \
               --image-ids imageTag="latest-main" \
               --query 'imageDetails[0].imageDigest' \
               --output text 2>/dev/null || echo "SKIP")
