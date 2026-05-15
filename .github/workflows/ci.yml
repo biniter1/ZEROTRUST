@@ -103,9 +103,6 @@ jobs:
       - name: Gitleaks scan (report)
         uses: gitleaks/gitleaks-action@v2  # v2.3.9
         id: gitleaks
-        continue-on-error: true
-        with:
-          upload-artifact: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -115,15 +112,7 @@ jobs:
         with:
           sarif_file: results.sarif
           category: gitleaks
-        continue-on-error: true  
 
-      # Enforce step — fail nếu có secret
-      - name: Gitleaks scan (enforce)
-        uses: gitleaks/gitleaks-action@v2
-        with:
-          upload-artifact: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ──────────────────────────────────────────────
   # JOB 3: SAST — chỉ chạy nếu có service thay đổi
