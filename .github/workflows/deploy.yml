@@ -237,10 +237,10 @@ jobs:
           # Lấy digest của tất cả services và build --set args
           IMAGE_SETS=""
           for SERVICE in ${{ env.SERVICES }}; do
-            DIGEST=$(aws ecr describe-images \\
-              --repository-name "${{ env.ECR_REPO_PREFIX }}/${SERVICE}" \\
-              --image-ids imageTag="${SHA}" \\
-              --query 'imageDetails[0].imageDigest' \\
+            DIGEST=$(aws ecr describe-images \
+              --repository-name "${{ env.ECR_REPO_PREFIX }}/${SERVICE}" \
+              --image-ids imageTag="${SHA}" \
+              --query 'imageDetails[0].imageDigest' \
               --output text 2>/dev/null || true)
             if [ -z "$DIGEST" ] || [ "$DIGEST" = "None" ]; then
               echo "Skipping ${SERVICE} — no image found"
@@ -253,25 +253,25 @@ jobs:
 
           # Lấy digest của frontend để set tag chung
           FRONTEND_DIGEST=$(aws ecr describe-images \\
-            --repository-name "${{ env.ECR_REPO_PREFIX }}/frontend" \\
-            --image-ids imageTag="${SHA}" \\
-            --query 'imageDetails[0].imageDigest' \\
+            --repository-name "${{ env.ECR_REPO_PREFIX }}/frontend" \
+            --image-ids imageTag="${SHA}" \
+            --query 'imageDetails[0].imageDigest' \
             --output text 2>/dev/null || true)
 
           # Helm install với digest — không dùng latest
-          helm upgrade --install online-boutique ./helm-chart \\
-            -f helm-chart/values-staging.yaml \\
-            -n staging \\
-            --create-namespace \\
-            --set "images.repository=${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO_PREFIX }}" \\
+          helm upgrade --install online-boutique ./helm-chart \
+            -f helm-chart/values-staging.yaml \
+            -n staging \
+            --create-namespace \
+            --set "images.repository=${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO_PREFIX }}" \
             --set "images.tag=@${FRONTEND_DIGEST}"
 
           # Update từng service với digest riêng
           for SERVICE in ${{ env.SERVICES }}; do
-            DIGEST=$(aws ecr describe-images \\
-              --repository-name "${{ env.ECR_REPO_PREFIX }}/${SERVICE}" \\
-              --image-ids imageTag="${SHA}" \\
-              --query 'imageDetails[0].imageDigest' \\
+            DIGEST=$(aws ecr describe-images \
+              --repository-name "${{ env.ECR_REPO_PREFIX }}/${SERVICE}" \
+              --image-ids imageTag="${SHA}" \
+              --query 'imageDetails[0].imageDigest' \
               --output text 2>/dev/null || true)
             if [ -z "$DIGEST" ] || [ "$DIGEST" = "None" ]; then
               continue
