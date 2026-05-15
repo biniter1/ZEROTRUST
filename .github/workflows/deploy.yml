@@ -238,8 +238,6 @@ jobs:
             -f helm-chart/values-staging.yaml \
             -n staging \
             --create-namespace \
-            --wait \
-            --timeout=5m \
             --set global.image.registry="${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO_PREFIX }}"
 
           for SERVICE in ${{ env.SERVICES }}; do
