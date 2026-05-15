@@ -25,7 +25,7 @@ resource "aws_iam_role" "gha_eks_access" {
           }
           StringLike = {
             # Chỉ main branch
-            "token.actions.githubusercontent.com:sub" = "repo:${var.github_org}/${var.github_repo}:ref:refs/heads/main"
+            "token.actions.githubusercontent.com:sub" = "repo:${var.github_org}/${var.github_repo}:*"
           }
         }
       }
@@ -49,6 +49,34 @@ resource "aws_iam_role_policy" "gha_eks_access" {
           "eks:DescribeCluster",
         ]
         Resource = "arn:aws:eks:${var.aws_region}:${var.production_account_id}:cluster/${var.eks_cluster_name}"
+      },
+      {
+        Sid      = "ECRAuth"
+        Effect   = "Allow"
+        Action   = "ecr:GetAuthorizationToken"
+        Resource = "*"
+      },
+      {
+        Sid    = "ECRReadOnly"
+        Effect = "Allow"
+        Action = [
+          "ecr:BatchGetImage",
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:DescribeImages",
+          "ecr:ListImages",
+          "ecr:DescribeRepositories",
+        ]
+        Resource = "arn:aws:ecr:${var.aws_region}:${var.production_account_id}:repository/online-boutique/*"
+      },
+      {
+        Sid    = "CosignVerify"
+        Effect = "Allow"
+        Action = [
+          "kms:Verify",
+          "kms:GetPublicKey",
+          "kms:DescribeKey"
+        ]
+        Resource = "*"
       },
       # Deny tất cả EKS destructive actions
       {
