@@ -299,6 +299,7 @@ jobs:
     uses: ./.github/workflows/reusable-java-ci.yml
     with:
       service: adservice
+      changed: ${{ needs.changes.outputs.adservice }}
       java-version: '17'
     secrets: inherit
 
@@ -309,6 +310,7 @@ jobs:
     uses: ./.github/workflows/reusable-dotnet-ci.yml
     with:
       service: cartservice
+      changed: ${{ needs.changes.outputs.cartservice }}
       dotnet-version: '8.0'
     secrets: inherit
 
