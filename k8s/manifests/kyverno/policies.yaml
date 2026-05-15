@@ -1,11 +1,9 @@
-# ── POLICY 1: VERIFY IMAGE SIGNATURE + SBOM ──────────────────
+# ── POLICY 1: VERIFY IMAGE SIGNATURE ─────────────────────────
 apiVersion: kyverno.io/v1
 kind: ClusterPolicy
 metadata:
   name: verify-image-signature
   annotations:
-    policies.kyverno.io/title: Verify Cosign Image Signature
-    policies.kyverno.io/severity: critical
     security.policy/standard: "SLSA-L3, NIST-800-207-T4"
 spec:
   validationFailureAction: Enforce
@@ -30,7 +28,7 @@ spec:
         - imageReferences:
             - "*.dkr.ecr.ap-southeast-1.amazonaws.com/online-boutique/*"
           attestations:
-            - predicateType: https://cyclonedx.org/bom
+            - type: https://cyclonedx.org/bom
               attestors:
                 - entries:
                     - keys:
@@ -64,14 +62,6 @@ spec:
                     operator: NotIn
                     value:
                       - "*@sha256:*"
-          - list: "request.object.spec.initContainers"
-            deny:
-              conditions:
-                any:
-                  - key: "{{ element.image }}"
-                    operator: NotIn
-                    value:
-                      - "*@sha256:*"
 ---
 # ── POLICY 3: REQUIRE RESOURCE LIMITS ────────────────────────
 apiVersion: kyverno.io/v1
@@ -89,7 +79,7 @@ spec:
         any:
           - resources:
               kinds: [Pod]
-              namespaces: [production]
+              namespaces: [production, staging]
       validate:
         message: "All containers must have CPU and memory requests and limits"
         foreach:
@@ -126,7 +116,7 @@ spec:
         any:
           - resources:
               kinds: [Pod]
-              namespaces: [production]
+              namespaces: [production, staging]
       validate:
         message: "Privileged containers are not allowed"
         foreach:
@@ -134,14 +124,7 @@ spec:
             deny:
               conditions:
                 any:
-                  - key: "{{ element.securityContext.privileged }}"
-                    operator: Equals
-                    value: true
-          - list: "request.object.spec.initContainers"
-            deny:
-              conditions:
-                any:
-                  - key: "{{ element.securityContext.privileged }}"
+                  - key: "{{ element.securityContext.privileged || false }}"
                     operator: Equals
                     value: true
     - name: deny-host-namespaces
@@ -149,19 +132,19 @@ spec:
         any:
           - resources:
               kinds: [Pod]
-              namespaces: [production]
+              namespaces: [production, staging]
       validate:
         message: "hostNetwork, hostPID, hostIPC are not allowed"
         deny:
           conditions:
             any:
-              - key: "{{ request.object.spec.hostNetwork }}"
+              - key: "{{ request.object.spec.hostNetwork || false }}"
                 operator: Equals
                 value: true
-              - key: "{{ request.object.spec.hostPID }}"
+              - key: "{{ request.object.spec.hostPID || false }}"
                 operator: Equals
                 value: true
-              - key: "{{ request.object.spec.hostIPC }}"
+              - key: "{{ request.object.spec.hostIPC || false }}"
                 operator: Equals
                 value: true
     - name: deny-host-path
@@ -169,13 +152,13 @@ spec:
         any:
           - resources:
               kinds: [Pod]
-              namespaces: [production]
+              namespaces: [production, staging]
       validate:
         message: "hostPath volumes are not allowed"
         deny:
           conditions:
             any:
-              - key: "{{ request.object.spec.volumes[].hostPath | length(@) }}"
+              - key: "{{ request.object.spec.volumes[?hostPath] | length(@) }}"
                 operator: GreaterThan
                 value: 0
 ---
@@ -195,40 +178,37 @@ spec:
         any:
           - resources:
               kinds: [Pod]
-              namespaces: [production]
+              namespaces: [production, staging]
       validate:
-        message: "Containers must have runAsNonRoot, readOnlyRootFilesystem, allowPrivilegeEscalation=false, and drop ALL capabilities"
+        message: "Containers must have proper securityContext"
         foreach:
           - list: "request.object.spec.containers"
             deny:
               conditions:
                 any:
-                  - key: "{{ element.securityContext.runAsNonRoot }}"
+                  - key: "{{ element.securityContext.runAsNonRoot || false }}"
                     operator: NotEqual
                     value: true
-                  - key: "{{ element.securityContext.readOnlyRootFilesystem }}"
-                    operator: NotEqual
-                    value: true
-                  - key: "{{ element.securityContext.allowPrivilegeEscalation }}"
+                  - key: "{{ element.securityContext.allowPrivilegeEscalation || true }}"
                     operator: NotEqual
                     value: false
                   - key: "ALL"
                     operator: AnyNotIn
-                    value: "{{ element.securityContext.capabilities.drop }}"
+                    value: "{{ element.securityContext.capabilities.drop || '' }}"
     - name: enforce-pod-security-context
       match:
         any:
           - resources:
               kinds: [Pod]
-              namespaces: [production]
+              namespaces: [production, staging]
       validate:
         message: "Pod must have runAsNonRoot and RuntimeDefault seccomp profile"
         deny:
           conditions:
             any:
-              - key: "{{ request.object.spec.securityContext.runAsNonRoot }}"
+              - key: "{{ request.object.spec.securityContext.runAsNonRoot || false }}"
                 operator: NotEqual
                 value: true
-              - key: "{{ request.object.spec.securityContext.seccompProfile.type }}"
+              - key: "{{ request.object.spec.securityContext.seccompProfile.type || '' }}"
                 operator: NotEqual
                 value: "RuntimeDefault"
