@@ -1,9 +1,4 @@
-# ============================================================
-# FLOW 2: K8s RBAC cho GitHub Actions deployer
-# Chuẩn: NSA K8s Hardening Guide §5 · CIS EKS 5.1.x
-# ============================================================
-
-# ── Role cho namespace production ────────────────────────────
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -11,12 +6,12 @@ metadata:
   namespace: production
 rules:
   - apiGroups: ["apps"]
-    resources: ["deployments", "replicasets"]
-    verbs: ["get", "list", "watch", "update", "patch"]
+    resources: ["deployments", "replicasets", "statefulsets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
     resources: ["pods", "services", "endpoints", "serviceaccounts",
                 "secrets", "configmaps", "persistentvolumeclaims"]
-    verbs: ["get", "list", "watch", "create", "update", "patch"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["networking.k8s.io"]
     resources: ["ingresses"]
     verbs: ["get", "list", "watch", "create", "update", "patch"]
@@ -35,7 +30,6 @@ roleRef:
   name: gha-deployer-role
   apiGroup: rbac.authorization.k8s.io
 ---
-# ── Role cho namespace staging ────────────────────────────────
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -43,12 +37,12 @@ metadata:
   namespace: staging
 rules:
   - apiGroups: ["apps"]
-    resources: ["deployments", "replicasets"]
-    verbs: ["get", "list", "watch", "update", "patch"]
+    resources: ["deployments", "replicasets", "statefulsets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
     resources: ["pods", "services", "endpoints", "serviceaccounts",
                 "secrets", "configmaps", "persistentvolumeclaims"]
-    verbs: ["get", "list", "watch", "create", "update", "patch"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["networking.k8s.io"]
     resources: ["ingresses"]
     verbs: ["get", "list", "watch", "create", "update", "patch"]
@@ -67,8 +61,6 @@ roleRef:
   name: gha-deployer-role
   apiGroup: rbac.authorization.k8s.io
 ---
-# ── ClusterRole: chỉ cho phép list/get namespaces ────────────
-# Helm cần check namespace tồn tại không trước khi install
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
