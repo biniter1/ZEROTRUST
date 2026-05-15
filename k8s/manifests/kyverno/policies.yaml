@@ -17,7 +17,7 @@ spec:
         any:
           - resources:
               kinds: [Pod]
-              namespaces: [production, staging]
+              namespaces: [production]
       verifyImages:
         - imageReferences:
             - "*.dkr.ecr.ap-southeast-1.amazonaws.com/online-boutique/*"
@@ -52,7 +52,7 @@ spec:
         any:
           - resources:
               kinds: [Pod]
-              namespaces: [production, staging]
+              namespaces: [production]
       validate:
         message: "Image must use digest (@sha256:...), not mutable tags"
         foreach:
@@ -89,7 +89,7 @@ spec:
         any:
           - resources:
               kinds: [Pod]
-              namespaces: [production, staging]
+              namespaces: [production]
       validate:
         message: "All containers must have CPU and memory requests and limits"
         foreach:
@@ -126,7 +126,7 @@ spec:
         any:
           - resources:
               kinds: [Pod]
-              namespaces: [production, staging]
+              namespaces: [production]
       validate:
         message: "Privileged containers are not allowed"
         foreach:
@@ -149,7 +149,7 @@ spec:
         any:
           - resources:
               kinds: [Pod]
-              namespaces: [production, staging]
+              namespaces: [production]
       validate:
         message: "hostNetwork, hostPID, hostIPC are not allowed"
         deny:
@@ -169,7 +169,7 @@ spec:
         any:
           - resources:
               kinds: [Pod]
-              namespaces: [production, staging]
+              namespaces: [production]
       validate:
         message: "hostPath volumes are not allowed"
         deny:
@@ -195,7 +195,7 @@ spec:
         any:
           - resources:
               kinds: [Pod]
-              namespaces: [production, staging]
+              namespaces: [production]
       validate:
         message: "Containers must have runAsNonRoot, readOnlyRootFilesystem, allowPrivilegeEscalation=false, and drop ALL capabilities"
         foreach:
@@ -220,7 +220,7 @@ spec:
         any:
           - resources:
               kinds: [Pod]
-              namespaces: [production, staging]
+              namespaces: [production]
       validate:
         message: "Pod must have runAsNonRoot and RuntimeDefault seccomp profile"
         deny:
