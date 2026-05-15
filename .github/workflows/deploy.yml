@@ -234,31 +234,51 @@ jobs:
 
           SHA="${{ github.sha }}"
 
-          helm upgrade --install online-boutique ./helm-chart \
-            -f helm-chart/values-staging.yaml \
-            -n staging \
-            --create-namespace \
-            --set global.image.registry="${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO_PREFIX }}"
-
+          # Lấy digest của tất cả services và build --set args
+          IMAGE_SETS=""
           for SERVICE in ${{ env.SERVICES }}; do
-            DIGEST=$(aws ecr describe-images \
-              --repository-name "${{ env.ECR_REPO_PREFIX }}/${SERVICE}" \
-              --image-ids imageTag="${SHA}" \
-              --query 'imageDetails[0].imageDigest' \
+            DIGEST=$(aws ecr describe-images \\
+              --repository-name "${{ env.ECR_REPO_PREFIX }}/${SERVICE}" \\
+              --image-ids imageTag="${SHA}" \\
+              --query 'imageDetails[0].imageDigest' \\
               --output text 2>/dev/null || true)
-
             if [ -z "$DIGEST" ] || [ "$DIGEST" = "None" ]; then
-              echo "Skipping ${SERVICE}"
+              echo "Skipping ${SERVICE} — no image found"
               continue
             fi
+            # Dùng digest làm tag: @sha256:xxx
+            IMAGE_SETS="${IMAGE_SETS} --set-string images.tag=@${DIGEST}"
+            echo "Found ${SERVICE}@${DIGEST:0:19}..."
+          done
 
+          # Lấy digest của frontend để set tag chung
+          FRONTEND_DIGEST=$(aws ecr describe-images \\
+            --repository-name "${{ env.ECR_REPO_PREFIX }}/frontend" \\
+            --image-ids imageTag="${SHA}" \\
+            --query 'imageDetails[0].imageDigest' \\
+            --output text 2>/dev/null || true)
+
+          # Helm install với digest — không dùng latest
+          helm upgrade --install online-boutique ./helm-chart \\
+            -f helm-chart/values-staging.yaml \\
+            -n staging \\
+            --create-namespace \\
+            --set "images.repository=${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO_PREFIX }}" \\
+            --set "images.tag=@${FRONTEND_DIGEST}"
+
+          # Update từng service với digest riêng
+          for SERVICE in ${{ env.SERVICES }}; do
+            DIGEST=$(aws ecr describe-images \\
+              --repository-name "${{ env.ECR_REPO_PREFIX }}/${SERVICE}" \\
+              --image-ids imageTag="${SHA}" \\
+              --query 'imageDetails[0].imageDigest' \\
+              --output text 2>/dev/null || true)
+            if [ -z "$DIGEST" ] || [ "$DIGEST" = "None" ]; then
+              continue
+            fi
             IMAGE="${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO_PREFIX }}/${SERVICE}@${DIGEST}"
-
-            kubectl set image deployment/${SERVICE} \
-              ${SERVICE}=${IMAGE} \
-              -n staging
-
-            echo "Deployed ${SERVICE}"
+            kubectl set image deployment/${SERVICE} ${SERVICE}=${IMAGE} -n staging
+            echo "Updated ${SERVICE}@${DIGEST:0:19}..."
           done
 
       - name: Verify staging rollout
