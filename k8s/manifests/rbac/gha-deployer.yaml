@@ -1,53 +1,62 @@
 # ============================================================
 # FLOW 2: K8s RBAC cho GitHub Actions deployer
-# Chuẩn: NSA K8s Hardening Guide §5
-#         CIS EKS Benchmark 5.1.x
+# Chuẩn: NSA K8s Hardening Guide §5 · CIS EKS 5.1.x
 # ============================================================
 
----
-# Role: deployer — chỉ update deployments namespace production
-# Không có: secrets, cluster-level, delete
+# ── Role cho namespace production ────────────────────────────
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: gha-deployer-role
   namespace: production
-  labels:
-    standard: "NSA-K8s-Hardening-Guide-Section5"
-    managed-by: "terraform"
 rules:
-  # Deployments — update image only
   - apiGroups: ["apps"]
-    resources: ["deployments"]
-    verbs: ["get", "list", "update", "patch"]
-  # ReplicaSets — verify rollout
-  - apiGroups: ["apps"]
-    resources: ["replicasets"]
-    verbs: ["get", "list", "watch"]
-  # Pods — health check sau deploy
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "list", "watch", "update", "patch"]
   - apiGroups: [""]
-    resources: ["pods"]
+    resources: ["pods", "services", "endpoints"]
     verbs: ["get", "list", "watch"]
-  # Services — verify endpoint
   - apiGroups: [""]
-    resources: ["services", "endpoints"]
-    verbs: ["get", "list"]
-  # KHÔNG có:
-  # - secrets (không được đọc/ghi secrets)
-  # - configmaps write (chỉ read nếu cần)
-  # - cluster-level resources
-  # - delete deployments
-
+    resources: ["secrets", "configmaps"]
+    verbs: ["get", "list", "create", "update", "patch"]
 ---
-# RoleBinding: map k8s-deployers group → gha-deployer-role
-# aws-auth ConfigMap đã map IAM role gha-eks-deploy-role → Group k8s-deployers
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: gha-deployer-binding
   namespace: production
-  labels:
-    standard: "NSA-K8s-Hardening-Guide-Section5"
+subjects:
+  - kind: Group
+    name: k8s-deployers
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: gha-deployer-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# ── Role cho namespace staging ────────────────────────────────
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: gha-deployer-role
+  namespace: staging
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["pods", "services", "endpoints"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["secrets", "configmaps"]
+    verbs: ["get", "list", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: gha-deployer-binding
+  namespace: staging
 subjects:
   - kind: Group
     name: k8s-deployers
