@@ -85,6 +85,17 @@ resource "aws_iam_role_policy" "gha_ecr_push" {
         # Scoped: chỉ online-boutique repo, không phải tất cả
         Resource = "arn:aws:ecr:${var.aws_region}:${var.production_account_id}:repository/online-boutique/*"
       },
+      {
+        Sid    = "CosignKMSSign"
+        Effect = "Allow"
+        Action = [
+          "kms:Sign",
+          "kms:Verify",
+          "kms:GetPublicKey",
+          "kms:DescribeKey"
+        ]
+        Resource = "*"
+      },
       # Deny tất cả ECR admin operations
       {
         Sid    = "DenyECRAdmin"
