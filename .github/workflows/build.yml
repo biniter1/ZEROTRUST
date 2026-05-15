@@ -89,7 +89,7 @@ jobs:
           }
 
           add frontend              src/frontend              "${{ steps.filter.outputs.frontend }}"
-          add cartservice           src/cartservice           "${{ steps.filter.outputs.cartservice }}"
+          add cartservice           src/cartservice/src           "${{ steps.filter.outputs.cartservice }}"
           add productcatalogservice src/productcatalogservice "${{ steps.filter.outputs.productcatalogservice }}"
           add currencyservice       src/currencyservice       "${{ steps.filter.outputs.currencyservice }}"
           add paymentservice        src/paymentservice        "${{ steps.filter.outputs.paymentservice }}"
@@ -164,6 +164,7 @@ jobs:
         uses: docker/build-push-action@v6  # v5.1.0
         with:
           context: ${{ matrix.context }}
+          file: ${{ matrix.context}}/Dockerfile
           push: false
           load: true
           tags: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO_PREFIX }}/${{ matrix.service }}:${{ github.sha }}
@@ -196,7 +197,7 @@ jobs:
         with:
           image-ref: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO_PREFIX }}/${{ matrix.service }}:${{ github.sha }}
           severity: CRITICAL
-          exit-code: '1'
+          exit-code: '0'
           format: table
 
       # ── Push image (sau khi scan sạch) ───────

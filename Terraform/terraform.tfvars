@@ -26,4 +26,4 @@ production_account_id = "492462084314"
 # GitHub
 # ──────────────────────────────────────────
 github_org  = "biniter1"
-github_repo = "DACN"
+github_repo = "ZEROTRUST"

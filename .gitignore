@@ -36,6 +36,7 @@ kubeconfig
 *.tfstate.backup
 *.tfvars
 !*.tfvars.example
+terraform.tfstate.*
 crash.log
 crash.*.log
 override.tf
