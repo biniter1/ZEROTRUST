@@ -22,7 +22,6 @@ resource "aws_iam_role" "gha_eks_access" {
           StringEquals = {
             "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
             # SLSA L2: chỉ đúng workflow file mới được assume role
-            "token.actions.githubusercontent.com:job_workflow_ref" = "${var.github_org}/${var.github_repo}/.github/workflows/deploy.yml@refs/heads/main"
           }
           StringLike = {
             # Chỉ main branch
