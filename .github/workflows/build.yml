@@ -207,7 +207,9 @@ jobs:
         with:
           context: ${{ matrix.context }}
           push: true
-          tags: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO_PREFIX }}/${{ matrix.service }}:${{ github.sha }}
+          tags: |
+            ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO_PREFIX }}/${{ matrix.service }}:${{ github.sha }}
+            ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPO_PREFIX }}/${{ matrix.service }}:latest-main
           no-cache: true
 
       # ── Generate SBOM (Syft) ──────────────────
