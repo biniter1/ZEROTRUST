@@ -20,7 +20,7 @@ on:
     types: [opened, synchronize, reopened]
 
 concurrency:
-  group: pr-${{ github.event.pull_request.number }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true   
 
 permissions:
@@ -104,6 +104,8 @@ jobs:
         uses: gitleaks/gitleaks-action@v2  # v2.3.9
         id: gitleaks
         continue-on-error: true
+        with:
+          upload-artifact: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -118,6 +120,8 @@ jobs:
       # Enforce step — fail nếu có secret
       - name: Gitleaks scan (enforce)
         uses: gitleaks/gitleaks-action@v2
+        with:
+          upload-artifact: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
