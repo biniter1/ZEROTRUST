@@ -14,11 +14,12 @@ rules:
     resources: ["deployments", "replicasets"]
     verbs: ["get", "list", "watch", "update", "patch"]
   - apiGroups: [""]
-    resources: ["pods", "services", "endpoints"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: [""]
-    resources: ["secrets", "configmaps"]
-    verbs: ["get", "list", "create", "update", "patch"]
+    resources: ["pods", "services", "endpoints", "serviceaccounts",
+                "secrets", "configmaps", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -33,7 +34,6 @@ roleRef:
   kind: Role
   name: gha-deployer-role
   apiGroup: rbac.authorization.k8s.io
-
 ---
 # ── Role cho namespace staging ────────────────────────────────
 apiVersion: rbac.authorization.k8s.io/v1
@@ -46,11 +46,12 @@ rules:
     resources: ["deployments", "replicasets"]
     verbs: ["get", "list", "watch", "update", "patch"]
   - apiGroups: [""]
-    resources: ["pods", "services", "endpoints"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: [""]
-    resources: ["secrets", "configmaps"]
-    verbs: ["get", "list", "create", "update", "patch"]
+    resources: ["pods", "services", "endpoints", "serviceaccounts",
+                "secrets", "configmaps", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
