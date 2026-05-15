@@ -252,7 +252,7 @@ jobs:
           done
 
           # Lấy digest của frontend để set tag chung
-          FRONTEND_DIGEST=$(aws ecr describe-images \\
+          FRONTEND_DIGEST=$(aws ecr describe-images \
             --repository-name "${{ env.ECR_REPO_PREFIX }}/frontend" \
             --image-ids imageTag="${SHA}" \
             --query 'imageDetails[0].imageDigest' \
