@@ -422,7 +422,6 @@ jobs:
 
       - name: Deploy to production namespace
         run: |
-          run: |
           # Lấy digest frontend cho helm install
           FRONTEND_DIGEST=$(aws ecr describe-images \
             --repository-name "${{ env.ECR_REPO_PREFIX }}/frontend" \
