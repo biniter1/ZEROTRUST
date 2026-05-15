@@ -8,7 +8,7 @@ on:
         type: string
       changed:
         required: true
-        type: boolean
+        type: string
       python-version:
         required: false
         type: string
