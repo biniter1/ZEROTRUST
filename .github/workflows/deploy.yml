@@ -133,7 +133,7 @@ jobs:
         run: |
           gh attestation verify \
             --repo ${{ github.repository }} \
-            "${{ steps.image.outputs.full_ref }}"
+            "oci://${{ steps.image.outputs.full_ref }}"
           echo "Provenance OK: ${{ matrix.service }}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
