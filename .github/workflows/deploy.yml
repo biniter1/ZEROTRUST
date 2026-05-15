@@ -85,10 +85,9 @@ jobs:
       - name: Get image digest from ECR
         id: image
         run: |
-          SHA="${{ github.event.workflow_run.head_sha }}"
           DIGEST=$(aws ecr describe-images \
             --repository-name ${{ env.ECR_REPO_PREFIX }}/${{ matrix.service }} \
-            --image-ids imageTag=${SHA} \
+            --image-ids imageTag="latest-main" \
             --query 'imageDetails[0].imageDigest' \
             --output text 2>/dev/null || echo "NOT_FOUND")
 
@@ -177,10 +176,9 @@ jobs:
       - name: Get image digest
         id: image
         run: |
-          SHA="${{ github.event.workflow_run.head_sha }}"
           DIGEST=$(aws ecr describe-images \
             --repository-name ${{ env.ECR_REPO_PREFIX }}/${{ matrix.service }} \
-            --image-ids imageTag=${SHA} \
+            --image-ids imageTag="latest-main" \
             --query 'imageDetails[0].imageDigest' \
             --output text 2>/dev/null || echo "NOT_FOUND")
           if [ "$DIGEST" == "NOT_FOUND" ]; then
@@ -232,14 +230,13 @@ jobs:
         run: |
           set -euo pipefail
 
-          SHA="${{ github.sha }}"
 
           # Lấy digest của tất cả services và build --set args
           IMAGE_SETS=""
           for SERVICE in ${{ env.SERVICES }}; do
             DIGEST=$(aws ecr describe-images \
               --repository-name "${{ env.ECR_REPO_PREFIX }}/${SERVICE}" \
-              --image-ids imageTag="${SHA}" \
+              --image-ids imageTag="latest-main" \
               --query 'imageDetails[0].imageDigest' \
               --output text 2>/dev/null || true)
             if [ -z "$DIGEST" ] || [ "$DIGEST" = "None" ]; then
@@ -254,7 +251,7 @@ jobs:
           # Lấy digest của frontend để set tag chung
           FRONTEND_DIGEST=$(aws ecr describe-images \
             --repository-name "${{ env.ECR_REPO_PREFIX }}/frontend" \
-            --image-ids imageTag="${SHA}" \
+            --image-ids imageTag="latest-main" \
             --query 'imageDetails[0].imageDigest' \
             --output text 2>/dev/null || true)
 
@@ -270,7 +267,7 @@ jobs:
           for SERVICE in ${{ env.SERVICES }}; do
             DIGEST=$(aws ecr describe-images \
               --repository-name "${{ env.ECR_REPO_PREFIX }}/${SERVICE}" \
-              --image-ids imageTag="${SHA}" \
+              --image-ids imageTag="latest-main" \
               --query 'imageDetails[0].imageDigest' \
               --output text 2>/dev/null || true)
             if [ -z "$DIGEST" ] || [ "$DIGEST" = "None" ]; then
@@ -377,14 +374,13 @@ jobs:
       # Final verify tại thời điểm approve — T3 per-session
       - name: Final verification before production
         run: |
-          SHA="${{ github.event.workflow_run.head_sha }}"
           echo "=== Final verification before production ==="
           echo "Commit: ${SHA} | Time: $(date -u)"
 
           for SERVICE in ${{ env.SERVICES }}; do
             DIGEST=$(aws ecr describe-images \
               --repository-name ${{ env.ECR_REPO_PREFIX }}/${SERVICE} \
-              --image-ids imageTag=${SHA} \
+              --image-ids imageTag="latest-main" \
               --query 'imageDetails[0].imageDigest' \
               --output text 2>/dev/null || echo "SKIP")
 
@@ -426,11 +422,10 @@ jobs:
 
       - name: Deploy to production namespace
         run: |
-          SHA="${{ github.event.workflow_run.head_sha }}"
           for SERVICE in ${{ env.SERVICES }}; do
             DIGEST=$(aws ecr describe-images \
               --repository-name ${{ env.ECR_REPO_PREFIX }}/${SERVICE} \
-              --image-ids imageTag=${SHA} \
+              --image-ids imageTag="latest-main" \
               --query 'imageDetails[0].imageDigest' \
               --output text 2>/dev/null || echo "SKIP")
 
