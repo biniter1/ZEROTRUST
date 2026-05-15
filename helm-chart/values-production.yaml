@@ -1,16 +1,6 @@
-# ============================================================
-# values-production.yaml
-# Override cho môi trường production trên k3d local
-# Tighter resource limits, no load generator
-# ============================================================
-
-global:
-  imagePullSecrets:
-    - name: ecr-secret
-    
 images:
-  repository: 091544734673.dkr.ecr.ap-southeast-2.amazonaws.com/online-boutique
-  tag: "latest"   # pipeline override thành sha-xxxxxx
+  repository: 492462084314.dkr.ecr.ap-southeast-1.amazonaws.com/online-boutique
+  tag: "latest"
 
 frontend:
   create: true
@@ -29,13 +19,10 @@ frontend:
       cpu: 300m
       memory: 256Mi
 
-# Production: NetworkPolicy sẽ bật khi Zero-Trust phase
 networkPolicies:
   create: false
-
 sidecars:
   create: false
-
 authorizationPolicies:
   create: false
 
@@ -52,10 +39,8 @@ cartDatabase:
     name: redis-cart
     publicRepository: true
 
-# Production: TẮT load generator (không cần sinh traffic giả)
 loadGenerator:
   create: false
-
 opentelemetryCollector:
   create: false
 
@@ -68,12 +53,10 @@ securityContext:
   enable: true
 
 seccompProfile:
-  enable: false
+  enable: true
+  type: RuntimeDefault
 
-# Production: resource cao hơn staging
 adService:
-  create: true
-  name: adservice
   resources:
     requests:
       cpu: 200m
@@ -83,8 +66,6 @@ adService:
       memory: 400Mi
 
 cartService:
-  create: true
-  name: cartservice
   resources:
     requests:
       cpu: 200m
@@ -94,8 +75,6 @@ cartService:
       memory: 300Mi
 
 checkoutService:
-  create: true
-  name: checkoutservice
   resources:
     requests:
       cpu: 150m
@@ -105,8 +84,6 @@ checkoutService:
       memory: 256Mi
 
 currencyService:
-  create: true
-  name: currencyservice
   resources:
     requests:
       cpu: 150m
@@ -116,8 +93,6 @@ currencyService:
       memory: 300Mi
 
 emailService:
-  create: true
-  name: emailservice
   resources:
     requests:
       cpu: 100m
@@ -127,8 +102,6 @@ emailService:
       memory: 192Mi
 
 paymentService:
-  create: true
-  name: paymentservice
   resources:
     requests:
       cpu: 150m
@@ -138,9 +111,6 @@ paymentService:
       memory: 300Mi
 
 productCatalogService:
-  create: true
-  name: productcatalogservice
-  extraLatency: ""
   resources:
     requests:
       cpu: 150m
@@ -150,8 +120,6 @@ productCatalogService:
       memory: 256Mi
 
 recommendationService:
-  create: true
-  name: recommendationservice
   resources:
     requests:
       cpu: 150m
@@ -161,8 +129,6 @@ recommendationService:
       memory: 500Mi
 
 shippingService:
-  create: true
-  name: shippingservice
   resources:
     requests:
       cpu: 150m
