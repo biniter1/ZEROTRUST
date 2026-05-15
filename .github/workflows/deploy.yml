@@ -366,7 +366,8 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           role-duration-seconds: 900
           role-session-name: gate-verify-${{ github.run_id }}
-
+      - name: ECR Login (for cosign to pull signature)
+        uses: aws-actions/amazon-ecr-login@v2
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3
 
