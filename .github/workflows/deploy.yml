@@ -20,7 +20,7 @@ on:
     types: [completed]
     branches: [main]
   workflow_dispatch:
-    
+
 
 concurrency:
   group: production-deploy
@@ -49,7 +49,9 @@ jobs:
   pre-deploy-verify:
     name: Pre-deploy Verify — ${{ matrix.service }}
     runs-on: ubuntu-latest
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success' 
     strategy:
       matrix:
         service:
