@@ -1,0 +1,3 @@
+# Workflow files require admin review
+.github/workflows/ @biniter1
+.github/CODEOWNERS @biniter1
