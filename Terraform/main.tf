@@ -98,14 +98,14 @@ module "cloudwatch" {
 # ──────────────────────────────────────────
 # IAM Identity Center (SSO) — 6 permission sets
 # ──────────────────────────────────────────
-module "sso" {
-  source = "./modules/identity/sso"
+# module "sso" {
+#   source = "./modules/identity/sso"
 
-  approved_regions      = var.aws_region
-  dev_account_id        = var.dev_account_id
-  staging_account_id    = var.staging_account_id
-  production_account_id = var.production_account_id
-}
+#   approved_regions      = var.aws_region
+#   dev_account_id        = var.dev_account_id
+#   staging_account_id    = var.staging_account_id
+#   production_account_id = var.production_account_id
+# }
 
 # ──────────────────────────────────────────
 # IRSA Flow 1 — GitHub Actions → ECR

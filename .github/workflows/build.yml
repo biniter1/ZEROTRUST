@@ -249,7 +249,7 @@ jobs:
             --yes \
             "$IMAGE"
 
-      # ── SLSA Provenance Attestation ───────────
+      # ── SLSA Provenance Attestation ───────────  
       - name: Generate SLSA Provenance
         uses: actions/attest-build-provenance@v1  # v2.2.3
         with:

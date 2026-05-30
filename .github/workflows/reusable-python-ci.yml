@@ -22,7 +22,7 @@ jobs:
   ci:
     if: inputs.changed == 'true'
     name: Python CI — ${{ inputs.service }}
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     outputs:
       artifact: ${{ steps.upload.outputs.artifact-id }}
     defaults:

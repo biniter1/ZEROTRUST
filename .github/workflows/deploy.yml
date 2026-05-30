@@ -223,8 +223,6 @@ jobs:
             --region ${{ env.AWS_REGION }} \
             --name ${{ env.EKS_CLUSTER_NAME }}
 
-      # Deploy bằng digest — không bao giờ dùng tag mutable
-      # Kế thừa ý tưởng Helm deploy từ pipeline cũ nhưng lên AWS EKS thật
       - name: Deploy to staging namespace
         run: |
           set -euo pipefail
