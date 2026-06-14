@@ -1,0 +1,52 @@
+title = "Zero Trust DevSecOps — Gitleaks Config"
+
+[extend]
+useDefault = true
+
+# ─── RULES BỔ SUNG ───────────────────────────────────────
+
+[[rules]]
+id = "cosign-kms-key-arn"
+description = "AWS KMS Key ARN hardcoded"
+regex = '''arn:aws:kms:[a-z0-9-]+:[0-9]{12}:key/[a-f0-9-]{36}'''
+tags = ["aws", "kms"]
+
+[[rules]]
+id = "stripe-api-key"
+description = "Stripe API key"
+regex = '''sk_(live|test)_[0-9a-zA-Z]{24,}'''
+tags = ["stripe", "payment"]
+
+[[rules]]
+id = "database-dsn"
+description = "Database connection string"
+regex = '''(postgres|mysql|mongodb):\/\/[^:]+:[^@]+@'''
+tags = ["database"]
+
+[[rules]]
+id = "eks-endpoint"
+description = "EKS cluster endpoint hardcoded"
+regex = '''https://[A-Z0-9]{32,}\.gr7\.[a-z0-9-]+\.eks\.amazonaws\.com'''
+tags = ["aws", "eks"]
+
+# ─── ALLOWLIST ────────────────────────────────────────────
+
+[allowlist]
+description = "Global allowlist"
+paths = [
+  '''tests?/fixtures/''',
+  '''test_data/''',
+  '''docs/''',
+  '''.*\.example$''',
+  '''.*\.template$''',
+  '''package-lock\.json''',
+  '''yarn\.lock''',
+  '''go\.sum''',
+  '''\.terraform\.lock\.hcl''',
+]
+regexes = [
+  '''PLACEHOLDER''',
+  '''YOUR_.*_HERE''',
+  '''<[A-Z_]+>''',
+  '''example\.com''',
+]
